@@ -99,6 +99,21 @@ class Trajectory():
         return math.sqrt(evaluate(t,self.x_dot)**2 + evaluate(t,self.y_dot)**2)
 
 
+    def heading(self,t):
+        x_dot = evaluate(t,self.x_dot)
+        #minus here to capture the axis flip
+        y_dot = -evaluate(t,self.y_dot)
+
+        if x_dot == 0:
+            if y_dot>0: heading = 90
+            else: heading = 270
+
+        else:
+            heading = math.degree(math.atan(y_dot/x_dot))
+
+        return heading
+
+
     def completePositionList(self,dt=.1):
         t = 0
         position_list = []

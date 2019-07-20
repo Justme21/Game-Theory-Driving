@@ -89,6 +89,50 @@ class GameTheoryDrivingController():
         # CONSTRUCT A GAME IN WHICH THEY ARE INCENTIVISED TO GO TO WHERE WE WANT TO, BY MANIPULATING
         # WHAT THEY WOULD WANT TO DO BASED ON THE COMPLIANCE VALUE
 
+        max_ep = None
+        NE_best_policies = []
+        for a,(E_p,NE_p) in enumerate(zip(E_policies,NE_policies)):
+            ep = 0
+            for j in range(len(E_p)):
+                for i in range(len(NE_p)):
+                    ep += E_p[j]*NE_p[i]*NE_cost_estimate[i][j]
+            if max_ep is None or ep>=max_ep:
+                if ep>max_ep:
+                    max_ep = ep
+                    NE_best_policies = []
+                NE_best_policies.append(a)
+
+        #THIS HERE IS WRONG. WE TREATED EACH INDEX AS IF IT POINTED TO A SPECIFIC TRAJECTORY, AS OPPPOSED
+        # TO A POLICY.
+        #INSTEAD THE BEST POLICIES ARE WHAT THE NE_AGENT MIGHT DO, WE MUST COMPUTE THE BEST RESPONSE TO EACH ONE
+        # GIVEN THE TRUE E REWARD FUNCTION, AND THEN THAT IS E'S BEHAVIOUR
+        NE_cost_second_estimate = [NE_cost_estimate[i] for i in NE_best_policies]
+        E_cost_second_estimate = []
+        for i,row in enumerate(E_global_cost):
+            new_row = []
+            for index in NE_best_policies:
+                val = row[index]
+                if val != -1:
+                    val,_ = computeReward(self.ego.copy(),self.traj_list[i],self.other.copy(),self.traj_list[index],ego_reward=self.goal_function)
+                new_row.append(val)
+
+            E_cost_second_estimte.append(new_row)
+
+        E_policies,NE_policies = computeNashEquilibria(E_cost_second_estimate,NE_cost_second_estimate)
+
+        max_ep = None
+        E_best_policies = []
+        for a,(E_p,NE_p) in enumerate(zip(E_policies,NE_policies)):
+            ep = 0
+            for j in range(len(E_p)):
+                for i in range(len(NE_p)):
+                    ep += E_p[j]*NE_p[i]*E_cost_estimate[j][i]
+            if max_ep is None or ep>=max_ep:
+                if ep>max_ep:
+                    max_ep = ep
+                    E_best_policies = []
+                E_best_policies.append(a)
+
         return action[0],action[1]
 
 

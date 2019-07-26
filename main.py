@@ -2,6 +2,7 @@ from trajectory_type_definitions import TrajectoryClasses
 from trajectory_type_definitions import evaluate,putCarOnTraj
 #import cost_function_classes
 
+import game_theory_controller_classes as gtcc
 import math
 import matplotlib.pyplot as plt
 import nashpy as nash
@@ -387,38 +388,47 @@ def computeNashEquilibria(E_cost_matrix,NE_cost_matrix):
 
 
 if __name__ == "__main__":
+    debug = False
     lane_width = 6
     speed_limit = 13.9
-    dt = .1
+    dt = .2
 
     jerk = 1.1
     accel_range = [-9,3.5]
     yaw_rate_range = [-10,10]
 
-    const_vel_controller = lcc.DrivingController("constant",speed_limit=speed_limit)
-    veh2 = vehicle_classes.Car(const_vel_controller,False,"Non-Ego",is_interactive=False,timestep=dt)
-    const_vel_controller.setup(ego=veh2)
+    time_len = 3
+    traj_classes = TrajectoryClasses(time_len=time_len,lane_width=lane_width,accel_range=accel_range,jerk=jerk)
+    traj_types = traj_classes.traj_types.keys()
 
-    standard_controller = lcc.DrivingController("random-unbiased",speed_limit=speed_limit,\
-                            accel_range=accel_range,yaw_rate_range=yaw_rate_range)
-    veh1 = vehicle_classes.Car(controller=standard_controller,is_ego=True,debug=False,label="Ego",timestep=dt) #Car with not controller that is ego
-    #veh1 = vehicle_classes.Car(controller=standard_controller,is_ego=True,label=1,timestep=dt) #Car with not controller that is ego
-    standard_controller.setup(ego=veh1)
+    veh1 = vehicle_classes.Car(controller=None,is_ego=True,debug=debug,label="Ego",timestep=dt)
+    veh2 = vehicle_classes.Car(controller=None,is_ego=False,debug=debug,label="Non-Ego",timestep=dt)
 
-    SAFE_DISTANCE = veh1.length
-    MIN_FRONT_BACK_DISTANCE = veh1.length/2 + 1
-    MIN_SIDE_DISTANCE = veh1.width/2 + 1
-
-    sim = initialiseSimulator([veh1,veh2],speed_limit,False,[speed_limit/2,speed_limit/2],lane_width,False)
+    sim = initialiseSimulator([veh1,veh2],speed_limit,True,[speed_limit/2,speed_limit/2],lane_width,False)
     #sim = initialiseSimulator([veh1],speed_limit,False,[speed_limit/2],lane_width,False)
     veh2.heading = (veh2.heading+180)%360
     veh2.initialisation_params["heading"] = veh2.heading
     veh2.sense()
 
-    traj_type = "D"
-    time_len = 3
-    lane_width = sim.roads[0].width/2
-    traj_classes = TrajectoryClasses(time_len=time_len,lane_width=lane_width,accel_range=accel_range,jerk=jerk)
+    #const_vel_controller = lcc.DrivingController("constant",speed_limit=speed_limit)
+    veh1_traj_list = list(traj_types)
+    veh2_traj_list = list(traj_types)
+    #veh1_traj_list = [traj_classes.makeTrajectory(x,veh1.state) for x in traj_types]
+    #veh2_traj_list = [traj_classes.makeTrajectory(x,veh2.state) for x in traj_types]
+    veh1_controller = gtcc.GameTheoryDrivingController(veh1,veh1_traj_list,traj_classes,other=veh2,other_traj_list=veh2_traj_list)
+    veh2_controller = gtcc.GameTheoryDrivingController(veh2,veh2_traj_list,traj_classes,other=veh1,other_traj_list=veh1_traj_list)
+
+    veh1.addControllers({"game_theory":veh1_controller})
+    veh2.addControllers({"game_theory":veh2_controller})
+
+    veh1.setController(tag="game_theory")
+    veh2.setController(tag="game_theory")
+
+    sim.runComplete()
+
+    SAFE_DISTANCE = veh1.length
+    MIN_FRONT_BACK_DISTANCE = veh1.length/2 + 1
+    MIN_SIDE_DISTANCE = veh1.width/2 + 1
 
 #    lane_change_traj = traj_classes.makeTrajectory(traj_type,veh1.state)
 #    action_list = lane_change_traj.completeActionList(veh1.Lr+veh1.Lf,dt)
@@ -444,25 +454,6 @@ if __name__ == "__main__":
 #    print(f"\nFinal State: {veh2.state}")
 #    exit(-1)
 #
-    traj_list = traj_classes.traj_types.keys()
-    E_cost_list, NE_cost_list = computeGlobalCostMatrix(veh1,veh2,traj_list)
-
-    print("\nE Grid")
-    print("\t{}".format("\t".join(traj_list)))
-    for move,row in zip(traj_list,E_cost_list):
-        print("{}|\t{}".format(move,"\t".join([str(x) for x in row])))
-
-    print("\nNE Grid")
-    print("\t{}".format("\t".join(traj_list)))
-    for move,row in zip(traj_list,NE_cost_list):
-        print("{}|\t{}".format(move,"\t".join([str(x) for x in row])))
-
-    E_policies,NE_policies = computeNashEquilibria(E_cost_list,NE_cost_list)
-
-    for i,(E,NE) in enumerate(zip(E_policies,NE_policies)):
-        print("{}: {}\t{}\n".format(i,E,NE))
-
-
     #sim = initialiseSimulator([veh1],speed_limit,False,[speed_limit],False)
 
 #    init_state = defineState(veh1)

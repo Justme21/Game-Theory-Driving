@@ -1,14 +1,17 @@
 # -*- coding: utf-8 -*-
+from trajectory_type_definitions import evaluate,putCarOnTraj,ReversedTrajectory,TrajectoryClasses
 import math
 import nashpy as nash
 import numbers
+import numpy as np
 import random
 
 class GameTheoryDrivingController():
 
-    def __init__(self,ego,epsilon=0,goal_function=None,other=None,traj_list=None,**kwargs):
+    def __init__(self,ego,ego_traj_list,traj_builder,goal_function=None,other=None,other_traj_list=None,**kwargs):
 
-        self.initialisation_params = {'ego':ego,'epsilon':epsilon,'other':other,'option_list':option_list}
+        self.initialisation_params = {'ego':ego,'ego_traj_list':ego_traj_list,'traj_builder':traj_builder,\
+                'goal_function':goal_function,'other':other,'other_traj_list':other_traj_list}
         self.initialisation_params.update(kwargs)
 
         if goal_function is not None:
@@ -16,61 +19,87 @@ class GameTheoryDrivingController():
         else:
             self.goal_function = zeroFunction
 
-        self.rules = rules
+        self.E_global_cost = None
+        self.NE_global_cost = None
 
-        if isinstance(ego,iavc.InteractionConsciousCar):
-            self.setup(ego=ego,other=ego.interactive_obstacles[0])
-        else:
-            self.setup(ego=ego,other=other)
+        self.traj_builder = traj_builder
 
-        self.epsilon = epsilon
-        self.other_epsilon = other_epsilon
+        self.setup(ego=ego,ego_traj_list=ego_traj_list,other=other,other_traj_list=other_traj_list)
 
         self.t = 0
+        self.ego_traj_index = None
+        self.ego_traj = None
 
-        self.traj_list = traj_list
-        self.ego_preference = [1/len(traj_list) for _ in traj_list]
-        self.other_preference = [1/len(traj_list) for _ in traj_list]
-
-        #In reality we only need to store the most recent state of each agent, but this setup is here so...
-        self.ego_states = []
-        self.other_states = []
+        #self.ego_states = []
+        #self.other_states = []
 
 
-    def setup(self,ego,other):
+    def setup(self,ego=None,other=None,ego_traj_list=None,other_traj_list=None):
         if ego is not None:
             self.ego = ego
-            self.initialisation_params['ego'] = ego
+            self.ego_traj_list = ego_traj_list
+            self.ego_preference = [1/len(ego_traj_list) for _ in ego_traj_list]
+            self.initialisation_params.update({'ego': ego, 'ego_traj_list': ego_traj_list})
         if other is not None:
             self.other = other
-            self.initialisation_params['other'] = other
+            self.other_traj_list = other_traj_list
+            self.other_preference = [1/len(other_traj_list) for _ in other_traj_list]
+            self.initialisation_params.update({'other': other, 'other_traj_list': other_traj_list})
 
 
-    def selectAction(self,**kwargs):
-        self.ego_preference = updatePreference(self.t,self.ego,self.traj_list,self.ego_preference)
-        self.other_preference = updatePreference(self.t,self.other,self.traj_list,self.other_preference)
-        E_global_cost,NE_global_cost = computeGlobalCostMatrix(self.ego,self.other,self.traj_list)
+    def selectAction(self,*args):
+        #We maintain an estimate of both agents preferences in order to approximate a perspective
+        #common to both agents
 
-        E_cost_estimate = list(E_global_cost)
-        NE_cost_estimate = list(NE_global_cost)
+        if self.ego_traj is None:
+            self.built_ego_traj_list = [self.traj_builder.makeTrajectory(x,self.ego.state) for x in self.ego_traj_list]
+            self.built_other_traj_list = [self.traj_builder.makeTrajectory(x,self.other.state) for x in self.other_traj_list]
+
+            #Compute the costs each agent experiences based on the assumption that both agents obey the rules of
+            # the road and don't want to crash
+            # This reward matrix does not include individual preferences of either agents
+            self.E_global_cost,self.NE_global_cost = computeGlobalCostMatrix(self.ego,self.built_ego_traj_list,self.other,self.built_other_traj_list)
+
+        self.ego_preference = updatePreference(self.t,self.ego,self.built_ego_traj_list,self.ego_preference)
+        self.other_preference = updatePreference(self.t,self.other,self.built_other_traj_list,self.other_preference)
+
+        #First step we will estimate the cost matrix that NE estimates in order to determine what they
+        #  are motivated to do.
+        E_cost_estimate = list(self.E_global_cost)
+        NE_cost_estimate = list(self.NE_global_cost)
 
         for i,row in enumerate(E_cost_estimate):
             new_row = []
             for entry in row:
-                if entry != -1: entry*=self.ego_preference[i]
+                if entry != -1: entry = self.ego_preference[i]
                 new_row.append(entry)
             E_cost_estimate[i] = list(new_row)
 
         for i,row in enumerate(NE_cost_estimate):
             new_row = []
             for entry in row:
-                if entry != -1: entry*=self.other_preference[i]
+                if entry != -1: entry = self.other_preference[i]
                 new_row.append(entry)
             NE_cost_estimate[i] = list(new_row)
 
         #These policies give us the optimal policies for E to follow under the assumption that
         # NE is rational and the assumption that the preferences have been correctly estimated
         E_policies,NE_policies = computeNashEquilibria(E_cost_estimate,NE_cost_estimate)
+
+        print(f"Selecting Action for {self.ego.label}")
+        print(f"\n Preferences are: \n\t\t{self.ego_traj_list}\nEgo: {self.ego_preference}\nNon-Ego: {self.other_preference}")
+        print("E Cost Estimate:")
+        for row in E_cost_estimate:
+            print(row)
+
+        print("\nNE Cost Estimate")
+        for row in NE_cost_estimate:
+            print(row)
+
+        print("NE believes optimal policies are")
+        for i,(E_pol,NE_pol) in enumerate(zip(E_policies,NE_policies)):
+            print(f"{i}: {E_pol}\t{NE_pol}")
+
 
         #BASED ON THE POLICIES THAT MAXIMISE NE'S EXPECTED PAYOFF E MUST NOW DETERMINE THEIR
         # BEST ACTION BASED ON THEIR KNOWN, TRUE REWARD FUNCTION
@@ -97,46 +126,105 @@ class GameTheoryDrivingController():
                 for i in range(len(NE_p)):
                     ep += E_p[j]*NE_p[i]*NE_cost_estimate[i][j]
             if max_ep is None or ep>=max_ep:
-                if ep>max_ep:
+                if max_ep is None or ep>max_ep:
                     max_ep = ep
                     NE_best_policies = []
                 NE_best_policies.append(a)
 
-        #THIS HERE IS WRONG. WE TREATED EACH INDEX AS IF IT POINTED TO A SPECIFIC TRAJECTORY, AS OPPPOSED
-        # TO A POLICY.
         #INSTEAD THE BEST POLICIES ARE WHAT THE NE_AGENT MIGHT DO, WE MUST COMPUTE THE BEST RESPONSE TO EACH ONE
         # GIVEN THE TRUE E REWARD FUNCTION, AND THEN THAT IS E'S BEHAVIOUR
-        NE_cost_second_estimate = [NE_cost_estimate[i] for i in NE_best_policies]
+        if self.ego_traj is  None:
+            #if ego traj is None then Ego is choosing a trajectory to follow, and can choose from any trajectory
+            ego_traj_choices = self.built_ego_traj_list
+        else:
+            #ottherwise Ego is already following a trajectory and can euther choose to continue with that
+            # trajectory, or reverse it (i.e. cancel the manoeuvre and go back)
+            ego_traj_choices = [self.ego_traj,ReversedTrajectory(self.ego_traj,self.t)]
+
+        print("\nEgo trajectory choices are: {}".format([x.label for x in ego_traj_choices]))
+
+        #Here we can calculate the Ego agent's true reward matrix based on the known trajectories available
+        # to them and their known reward function
         E_cost_second_estimate = []
-        for i,row in enumerate(E_global_cost):
+        for ego_traj in ego_traj_choices:
             new_row = []
-            for index in NE_best_policies:
-                val = row[index]
-                if val != -1:
-                    val,_ = computeReward(self.ego.copy(),self.traj_list[i],self.other.copy(),self.traj_list[index],ego_reward=self.goal_function)
+            for other_traj in self.built_other_traj_list:
+                val,_ = computeReward(self.ego.copy(),ego_traj,self.other.copy(),other_traj,veh1_reward_function=self.goal_function)
                 new_row.append(val)
 
-            E_cost_second_estimte.append(new_row)
+            E_cost_second_estimate.append(new_row)
 
-        E_policies,NE_policies = computeNashEquilibria(E_cost_second_estimate,NE_cost_second_estimate)
+        print("\nE's true estimate of the cost")
+        for row in E_cost_second_estimate:
+            print(row)
 
-        max_ep = None
-        E_best_policies = []
-        for a,(E_p,NE_p) in enumerate(zip(E_policies,NE_policies)):
-            ep = 0
-            for j in range(len(E_p)):
+        #We compute the expected payoff for each possible trajectory of E against each possible optimal
+        # policy for NE
+        expected_payoffs = []
+        for index in NE_best_policies:
+            payoff = []
+            NE_p = NE_policies[index]
+            for j in range(len(ego_traj_choices)):
+                ep = 0
                 for i in range(len(NE_p)):
-                    ep += E_p[j]*NE_p[i]*E_cost_estimate[j][i]
-            if max_ep is None or ep>=max_ep:
-                if ep>max_ep:
-                    max_ep = ep
-                    E_best_policies = []
-                E_best_policies.append(a)
+                    ep += NE_p[i]*E_cost_second_estimate[j][i]
+                payoff += [ep]
+            expected_payoffs.append(list(payoff))
 
+        print("\nE's expected payoff for each strategy")
+        for entry in expected_payoffs:
+            print(entry)
+
+
+        #We identify the trajectory for E that would have the highest expected value
+        ep_sum = [0 for _ in ego_traj_choices]
+        for row in expected_payoffs:
+            for i,ep in enumerate(row):
+                ep_sum[i] += ep
+
+        max_index,max_ep = None,None
+        for i,entry in enumerate(ep_sum):
+            if max_index is None or entry>max_ep:
+                max_index = i
+                max_ep = entry
+
+        chosen_traj = ego_traj_choices[max_index]
+
+        print("\nChoosing {} with expected reward {}".format(chosen_traj.label,max_ep))
+        if chosen_traj != self.ego_traj:
+            if self.ego_traj is not None:
+                print("Ego proposing to change from {} to {}".format(self.ego_traj.label,chosen_traj.label))
+            else:
+                print("Ego proposing to change to {}".format(chosen_traj.label))
+            self.t = 0
+            self.ego_traj = chosen_traj
+
+
+        action = self.ego_traj.action(self.t,self.ego.Lf+self.ego.Lr)
+        self.t += self.ego.timestep
+
+        if self.t>self.ego_traj.traj_len_t:
+            print("\n{} Reached the end of the trajectory. Resetting Trajectory".format(self.ego.label))
+            self.ego_traj = None
+
+        print("\n")
         return action[0],action[1]
 
 
+    def paramCopy(self,target=None):
+        dup_initialisation_params = dict(self.initialisation_params)
+        dup_initialisation_params["ego"] = target
+        return dup_initialisation_params
+
+
+    def copy(self,**kwargs):
+        dup_init_params = self.paramCopy(**kwargs)
+        return GameTheoryDrivingController(**dup_init_params)
+
+
     def recordStates(self):
+        """Store the current state of the agents"""
+        #Not currently used
         self.ego_states.append(self.ego.state)
         self.other_states.append(self.other.state)
 
@@ -145,7 +233,8 @@ class GameTheoryDrivingController():
         """Called (through the vehicle object) at the end of each iteration/timestep of the simulation.
            Allows information about how the iteration actually played out to be gathered"""
         #We use this function to determine the actions each agent actually chose
-        self.recordStates()
+        pass
+        #self.recordStates()
 
         #HERE WE WILL UPDATE COMPLIANCE (BETA)
 
@@ -163,8 +252,8 @@ def getState(veh,traj,t):
     return state
 
 
-def getProb(state,traj,t):
-    target_state = getState(traj,t)
+def getProb(veh,state,traj,t):
+    target_state = getState(veh,traj,t)
     exponent = 0
     for entry in target_state:
         exponent += computeDistance(target_state[entry],state[entry])**2
@@ -172,21 +261,21 @@ def getProb(state,traj,t):
     return math.exp(-exponent)
 
 
-def updatePreference(t,veh,veh_traj_list,veh_pref,veh_actions):
+def updatePreference(t,veh,veh_traj_list,veh_pref):
     """We update the preferences of both agents based on the previous observations using a Bayes Filter"""
     new_pref = []
     num_sum = 0
-    states = veh_states[-1]
-    for i,traj in enumerate(traj_list):
-        new_pref = veh_pref[i]*getProb(state,traj,t)
-        num_sum += new_pref
-        new_pref.append(new_pref)
+    state = veh.state
+    for i,traj in enumerate(veh_traj_list):
+        new_pref_val = veh_pref[i]*getProb(veh,state,traj,t)
+        num_sum += new_pref_val
+        new_pref.append(new_pref_val)
 
     new_pref = [x/num_sum for x in new_pref]
     return new_pref
 
 
-def computeReward(veh1,traj1,veh2,traj2):
+def computeReward(veh1,traj1,veh2,traj2,veh1_reward_function=None):
     t = traj1.traj_len_t/2
     deriv = None
     try_num = 100
@@ -246,16 +335,19 @@ def computeReward(veh1,traj1,veh2,traj2):
         if veh1.on == []: r1 = -1 # not on anything => bad outcome
         if veh2.on == []: r2 = -1
 
+        if veh1_reward_function is not None and r1!=-1:
+            r1 = veh1_reward_function(veh1)
+
     return r1,r2
 
 
-def computeGlobalCostMatrix(veh1,veh2,traj_list):
-    E_cost_list = [[0 for _ in traj_list] for _ in traj_list]
-    NE_cost_list = [[0 for _ in traj_list] for _ in traj_list]
-    for i,E_traj in enumerate(traj_list):
-        for j,NE_traj in enumerate(traj_list):
+def computeGlobalCostMatrix(veh1,veh1_traj_list,veh2,veh2_traj_list):
+    E_cost_list = [[0 for _ in veh2_traj_list] for _ in veh1_traj_list]
+    NE_cost_list = [[0 for _ in veh1_traj_list] for _ in veh2_traj_list]
+    for i,E_traj in enumerate(veh1_traj_list):
+        for j,NE_traj in enumerate(veh2_traj_list):
             #print("E doing: {}\tNE doing: {}".format(E_traj,NE_traj))
-            E_cost_list[i][j],NE_cost_list[j][i] = computeReward(veh1.copy(),traj_classes.makeTrajectory(E_traj,veh1.state),veh2.copy(),traj_classes.makeTrajectory(NE_traj,veh2.state))
+            E_cost_list[i][j],NE_cost_list[j][i] = computeReward(veh1.copy(),E_traj,veh2.copy(),NE_traj)
 
     return E_cost_list,NE_cost_list
 

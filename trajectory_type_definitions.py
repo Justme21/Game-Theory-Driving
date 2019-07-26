@@ -54,6 +54,7 @@ class Trajectory():
         self.traj_func = {"LCL":laneChange,"LCR":laneChange,"A":velocityChange,"D":velocityChange,"NA":noAction}
         self.line_x,self.line_y,self.traj_len_t = self.traj_func[traj_type](init_state,dest_state,time_len,accel_range=accel_range,jerk=jerk)
         self.computeDerivatives()
+        self.label = traj_type
 
 
     def computeDerivatives(self):
@@ -109,9 +110,20 @@ class Trajectory():
             else: heading = 270
 
         else:
-            heading = math.degree(math.atan(y_dot/x_dot))
+            heading = math.degrees(math.atan(y_dot/x_dot))
 
         return heading
+
+
+    def state(self,t):
+        """Returns the estimated state at a known timepoint along the trajectory.
+           ACtion omitted as this would require vehicle axle length"""
+        posit = self.position(t)
+        vel = self.velocity(t)
+        heading = self.heading(t)
+
+        state = {"position":posit,"velocity":vel,"heading":heading}
+        return state
 
 
     def completePositionList(self,dt=.1):
@@ -142,6 +154,42 @@ class Trajectory():
             t += dt
 
         return action_list
+
+
+class ReversedTrajectory(Trajectory):
+    """Takes a trajectory and a time. All output values are on from the specified trajectory if it were flipped about a vertical
+       axis at the specified time (reverse point). Has all the functions required to compute actions and perform
+       gradient descent"""
+    def __init__(self,trajectory,t):
+        self.trajectory = trajectory
+        self.reverse_point = t
+        self.traj_len_t = self.reverse_point
+        self.line_x = self.trajectory.line_x
+        self.line_y = self.trajectory.line_y
+        self.computeDerivatives()
+        self.label = "{}-Reversed-{}".format(trajectory.label,self.reverse_point)
+
+
+    def reverse(self,t):
+        #return 2*self.reverse_point-t
+        #We are presuming that the reversedTrajectory is treated as a separate trajectory than the original
+        return self.reverse_point-t
+
+
+    def action(self,t,axle_length):
+        return self.trajectory.action(self.reverse(t),axle_length)
+
+
+    def position(self,t):
+        return self.trajectory.position(self.reverse(t))
+
+
+    def velocity(self,t):
+        return self.trajectory.velocity(self.reverse(t))
+
+
+    def heading(self,t):
+        return self.trajectory.heading(self.reverse(t))
 
 
 def laneChange(init_state,dest_state,time_len,**kwargs):

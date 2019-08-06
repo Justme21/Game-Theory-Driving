@@ -24,7 +24,7 @@ class TrajectoryClasses():
     def __init__(self,time_len=1,lane_width=6,accel_range=[-2,2],jerk=1):
         self.traj_len = time_len
         self.traj_types = {"LCR":{"position":(lane_width,0)},"LCL":{"position":(-lane_width,0)},\
-                "A": {"acceleration":1},"D":{"acceleration":-1},"NA":{}}
+                "A": {"acceleration":1},"D":{"acceleration":-1},"NA":{},"ES":{}}
 
         self.boundary_constraints = {"accel_range":accel_range,"jerk":jerk}
 
@@ -51,8 +51,10 @@ class Trajectory():
             print("Error, default values for states are invalid")
             exit(-1)
         self.traj_len_t = time_len
-        self.traj_func = {"LCL":laneChange,"LCR":laneChange,"A":velocityChange,"D":velocityChange,"NA":noAction}
-        self.line_x,self.line_y,self.traj_len_t = self.traj_func[traj_type](init_state,dest_state,time_len,accel_range=accel_range,jerk=jerk)
+        traj_func = {"LCL":laneChange,"LCR":laneChange,"A":velocityChange,"D":velocityChange,"NA":noAction,"ES":emergencyStop}
+        relevant_features = {"LCL": ["position","heading"],"LCR":["position","heading"],"A":["acceleration","yaw_rate"],"D":["acceleration","yaw_rate"],"NA":None,"ES":["acceleration","velocity"]}
+        self.relevant_features = relevant_features[traj_type]
+        self.line_x,self.line_y,self.traj_len_t = traj_func[traj_type](init_state,dest_state,time_len,accel_range=accel_range,jerk=jerk)
         self.computeDerivatives()
         self.label = traj_type
 
@@ -69,25 +71,28 @@ class Trajectory():
 
 
     def action(self,t,axle_length):
-        x = evaluate(t,self.x)
-        y = evaluate(t,self.y)
+        if t>self.traj_len_t:
+            return 0,0
+        else:
+            x = evaluate(t,self.x)
+            y = evaluate(t,self.y)
 
-        x_dot = evaluate(t,self.x_dot)
-        y_dot = evaluate(t,self.y_dot)
-        x_dot_dot = evaluate(t,self.x_dot_dot)
-        y_dot_dot = evaluate(t,self.y_dot_dot)
+            x_dot = evaluate(t,self.x_dot)
+            y_dot = evaluate(t,self.y_dot)
+            x_dot_dot = evaluate(t,self.x_dot_dot)
+            y_dot_dot = evaluate(t,self.y_dot_dot)
 
-        denom_a = math.sqrt(x_dot**2 + y_dot**2)
-        denom_yaw = denom_a**3
+            denom_a = math.sqrt(x_dot**2 + y_dot**2)
+            denom_yaw = denom_a**3
 
-        #print("COEFS: X: {}\tY: {}\tX_DOT: {}\tY_DOT: {}\tX_DOT_DOT: {}\tY_DOT_DOT: {}".format(self.line_x.coefs,self.line_y.coefs,self.x_dot,self.y_dot,self.x_dot_dot,self.y_dot_dot))
-        #print("X: {}\tY: {}\tX_DOT: {}\tY_DOT: {}\tX_DOT_DOT: {}\tY_DOT_DOT: {}".format(x,y,x_dot,y_dot,x_dot_dot,y_dot_dot))
+            #print("COEFS: X: {}\tY: {}\tX_DOT: {}\tY_DOT: {}\tX_DOT_DOT: {}\tY_DOT_DOT: {}".format(self.line_x.coefs,self.line_y.coefs,self.x_dot,self.y_dot,self.x_dot_dot,self.y_dot_dot))
+            #print("X: {}\tY: {}\tX_DOT: {}\tY_DOT: {}\tX_DOT_DOT: {}\tY_DOT_DOT: {}".format(x,y,x_dot,y_dot,x_dot_dot,y_dot_dot))
 
-        acceleration = ((x_dot*x_dot_dot)+(y_dot*y_dot_dot))/denom_a
-        #I think due to the flipping of the y-axis yaw rate needs to be computed with negatives of y-associated values
-        # This works but am not sure. Original is commented out below
-        #yaw_rate = math.degrees(math.atan(((x_dot*y_dot_dot)-(y_dot*x_dot_dot))*axle_length/denom_yaw))
-        yaw_rate = math.degrees(math.atan(((x_dot*-y_dot_dot)-(-y_dot*x_dot_dot))*axle_length/denom_yaw))
+            acceleration = ((x_dot*x_dot_dot)+(y_dot*y_dot_dot))/denom_a
+            #I think due to the flipping of the y-axis yaw rate needs to be computed with negatives of y-associated values
+            # This works but am not sure. Original is commented out below
+            #yaw_rate = math.degrees(math.atan(((x_dot*y_dot_dot)-(y_dot*x_dot_dot))*axle_length/denom_yaw))
+            yaw_rate = math.degrees(math.atan(((x_dot*-y_dot_dot)-(-y_dot*x_dot_dot))*axle_length/denom_yaw))
 
         return acceleration,yaw_rate
 
@@ -111,7 +116,9 @@ class Trajectory():
 
         else:
             heading = math.degrees(math.atan(y_dot/x_dot))
+            if x_dot<0: heading = (heading+180)%360#atan has domain (-90,90) 
 
+        heading%=360
         return heading
 
 
@@ -163,7 +170,9 @@ class ReversedTrajectory(Trajectory):
     def __init__(self,trajectory,t):
         self.trajectory = trajectory
         self.reverse_point = t
-        self.traj_len_t = self.reverse_point
+        #Reversing trajectory means we augment the trajectory to extend it from the current time
+        self.traj_len_t = 2*self.reverse_point #technically the full
+        self.turning_posit = self.trajectory.position(self.reverse_point)
         self.line_x = self.trajectory.line_x
         self.line_y = self.trajectory.line_y
         self.computeDerivatives()
@@ -171,17 +180,24 @@ class ReversedTrajectory(Trajectory):
 
 
     def reverse(self,t):
-        #return 2*self.reverse_point-t
+        return 2*self.reverse_point-t
         #We are presuming that the reversedTrajectory is treated as a separate trajectory than the original
-        return self.reverse_point-t
+        #return self.reverse_point-t
 
 
     def action(self,t,axle_length):
-        return self.trajectory.action(self.reverse(t),axle_length)
+        accel,yaw_rate = self.trajectory.action(self.reverse(t),axle_length)
+        return -accel,-yaw_rate
 
 
     def position(self,t):
-        return self.trajectory.position(self.reverse(t))
+        posit_on_traj = self.trajectory.position(self.reverse(t))
+        if self.reverse(t)!=self.reverse_point:
+            x_pt = self.turning_posit[0] + ((posit_on_traj[0]-self.turning_posit[0])/(self.reverse(t)-self.reverse_point))*(t-self.reverse_point)
+            y_pt = self.turning_posit[1] + ((posit_on_traj[1]-self.turning_posit[1])/(self.reverse(t)-self.reverse_point))*(t-self.reverse_point)
+            return (x_pt,y_pt)
+        else:
+            return self.turning_posit
 
 
     def velocity(self,t):
@@ -190,6 +206,15 @@ class ReversedTrajectory(Trajectory):
 
     def heading(self,t):
         return self.trajectory.heading(self.reverse(t))
+
+
+class StoppedTrajectory(Trajectory):
+    """Takes in a trajectory and prematurely stops it. i.e. this is a trajectory with only a single point in it. Returns action (0,0)"""
+    def __init__(self,trajectory,t):
+        self.traj_len_t = 0
+        self.line_x,self.line_y,self.traj_len_t = noAction(trajectory.state(t),None,self.traj_len_t)
+        self.label = "{}-Stopped-{}".format(trajectory.label,t)
+        self.computeDerivatives()
 
 
 def laneChange(init_state,dest_state,time_len,**kwargs):
@@ -209,8 +234,9 @@ def laneChange(init_state,dest_state,time_len,**kwargs):
     C = init_accel[0]
     D = init_vel[0]
     E = init_pos[0]
-    A = (36/(time_len**4))*(C*(time_len**2)/6 + 2*D*time_len/3 + E + time_len*init_vel[0]/3 - dest_pos[0])
-    B = (2/(time_len**2))*(init_vel[0] -A*(time_len**3)/3 - C*time_len - D)
+    #A = (36/(time_len**4))*(C*(time_len**2)/6 + 2*D*time_len/3 + E + time_len*init_vel[0]/3 - dest_pos[0])
+    A = (36/(time_len**4))*(C*(time_len**2)/6 + 2*D*time_len/3 + E - dest_pos[0])
+    B = (2/(time_len**2))*(-A*(time_len**3)/3 - C*time_len - D)
 
     A_x = A/12
     B_x = B/6
@@ -257,11 +283,42 @@ def velocityChange(init_state,dest_state,time_len,accel_range,jerk,**kwargs):
         #else: B = jerk
     A = -B/time_len
 
-    A_y = A/12
+    A_y = A/12 #should this be A/24
     B_y = B/6
     C_y = C/2
     D_y = D
     E_y = E
+    line_y = Line(A_y,B_y,C_y,D_y,E_y)
+
+    A_x = init_vel[0]
+    B_x = init_pos[0]
+    line_x = Line(A_x,B_x)
+
+    return line_x,line_y,time_len
+
+
+def emergencyStop(init_state,dest_state,time_len,accel_range,**kwargs):
+    init_pos = init_state["position"]
+    init_vel = init_state["velocity"]
+    init_heading = init_state["heading"]
+    init_accel = init_state["acceleration"]
+
+    init_vel = (init_vel*math.cos(math.radians(init_heading)),-init_vel*math.sin(math.radians(init_heading)))
+    init_accel = (init_accel*math.cos(math.radians(init_heading)),-init_accel*math.sin(math.radians(init_heading)))
+
+    C = init_accel[1]
+    D = init_vel[1]
+    E = init_pos[1]
+
+    A = (12/(time_len**3))*(C*time_len/2 + D + accel_range[0]*time_len/2)
+    B = (1/time_len)*(accel_range[0]-C-A*(time_len**2)/2)
+
+    A_y = A/24
+    B_y = B/6
+    C_y = C/2
+    D_y = D
+    E_y = E
+
     line_y = Line(A_y,B_y,C_y,D_y,E_y)
 
     A_x = init_vel[0]

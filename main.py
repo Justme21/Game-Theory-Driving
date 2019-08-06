@@ -1,7 +1,9 @@
+from trajectory_controller_classes import TrajectoryDrivingController
 from trajectory_type_definitions import TrajectoryClasses
 from trajectory_type_definitions import evaluate,putCarOnTraj
 #import cost_function_classes
 
+import datetime
 import game_theory_controller_classes as gtcc
 import math
 import matplotlib.pyplot as plt
@@ -52,6 +54,7 @@ def initialiseSimulator(cars,speed_limit,graphics,init_speeds,lane_width=None,da
 
     sim.initialiseSimulator(num_junctions,num_roads,road_angles,road_lengths,junc_pairs,\
                                                     car_speeds,starts,dests,lane_width=lane_width)
+
     return sim
 
 
@@ -301,99 +304,41 @@ def obstacleInteractionCost(ego_state,obstacle_state):
         return front_back_overlap*side_cost + side_overlap*front_back_cost
 
 
-def computeReward(veh1,traj1,veh2,traj2):
-    t = traj1.traj_len_t/2
-    deriv = None
-    try_num = 100
-    i = 0
-    while i<try_num and (t>=0 and t<=traj1.traj_len_t) and (deriv is None or abs(deriv)>veh1.timestep):
-        E_x = evaluate(t,traj1.x)
-        E_x_dot = evaluate(t,traj1.x_dot)
-        E_x_dot_dot = evaluate(t,traj1.x_dot_dot)
+def changeLaneLeftRewardFunction(init_veh,final_veh):
+    for obj in final_veh.on:
+        if isinstance(obj,road_classes.Lane):
+            if obj.is_top_up: return 1
 
-        E_y = evaluate(t,traj1.y)
-        E_y_dot = evaluate(t,traj1.y_dot)
-        E_y_dot_dot = evaluate(t,traj1.y_dot_dot)
-
-        NE_x = evaluate(t,traj2.x)
-        NE_x_dot = evaluate(t,traj2.x_dot)
-        NE_x_dot_dot = evaluate(t,traj2.x_dot_dot)
-
-        NE_y = evaluate(t,traj2.y)
-        NE_y_dot = evaluate(t,traj2.y_dot)
-        NE_y_dot_dot = evaluate(t,traj2.y_dot_dot)
-
-        deriv = 2*((evaluate(t,traj1.x)-evaluate(t,traj2.x))*(evaluate(t,traj1.x_dot)-evaluate(t,traj2.x_dot))+(evaluate(t,traj1.y)-evaluate(t,traj2.y))*(evaluate(t,traj1.y_dot)-evaluate(t,traj2.y_dot)))
-        t -= .01*deriv
-        i+=1
-
-    if t<0: t=0
-    elif t>traj1.traj_len_t: t=traj1.traj_len_t
-
-    putCarOnTraj(veh1,traj1,t)
-    putCarOnTraj(veh2,traj2,t)
-
-    #print("Cars are closest together at time {}\n{}: Pos: {}\tHeading: {}\tCorners: {}\n{}: Pos: {}\tHeading: {}\tCorners: {}".format(\
-    #        t,veh1.label,veh1.state["position"],veh1.state["heading"],veh1.four_corners,veh2.label,veh2.state["position"],veh2.state["heading"],veh2.four_corners))
-
-    r1 = 0
-    r2 = 0
-    if veh1.evaluateCrash(veh2):
-        #print("Cars have Crashed")
-        r1 = -1
-        r2 = -1
-    else:
-        #print("No Crash found")
-
-        putCarOnTraj(veh1,traj1,traj1.traj_len_t)
-        putCarOnTraj(veh2,traj2,traj2.traj_len_t)
-        #This is a bit sloppy as it doesn't account for the fact that a car might go off a road and back on during a trajectory. But for now we will allow it        
-        #This also might require some refinement as it only works becausd teh copies cannot directly interact
-        #print("E is on: {}".format([x.label for x in veh1.on]))
-        #for entry in veh1.on:
-        #    print("E: (Heading: {}) {}-{}\t{}: {}-{}".format(veh1.heading,veh1.four_corners["front_left"],veh1.four_corners["back_right"],entry.label,entry.four_corners["front_left"],entry.four_corners["back_right"]))
-        #print("NE is on: {}".format([x.label for x in veh2.on]))
-        #for entry in veh2.on:
-        #    print("NE: (Heading: {}) {}-{}\t{}: {}-{}".format(veh2.heading,veh2.four_corners["front_left"],veh2.four_corners["back_right"],entry.label,entry.four_corners["front_left"],entry.four_corners["back_right"]))
-        #print("\n")
-        if veh1.on == []: r1 = -1 # not on anything => bad outcome
-        if veh2.on == []: r2 = -1
-
-    return r1,r2
+    return 0
 
 
-def computeGlobalCostMatrix(veh1,veh2,traj_list):
-    E_cost_list = [[0 for _ in traj_list] for _ in traj_list]
-    NE_cost_list = [[0 for _ in traj_list] for _ in traj_list]
-    for i,E_traj in enumerate(traj_list):
-        for j,NE_traj in enumerate(traj_list):
-            #print("E doing: {}\tNE doing: {}".format(E_traj,NE_traj))
-            E_cost_list[i][j],NE_cost_list[j][i] = computeReward(veh1.copy(),traj_classes.makeTrajectory(E_traj,veh1.state),veh2.copy(),traj_classes.makeTrajectory(NE_traj,veh2.state))
+def changeLaneRightRewardFunction(init_veh,final_veh):
+    for obj in final_veh.on:
+        if isinstance(obj,road_classes.Lane):
+            if not obj.is_top_up: return 1
 
-    return E_cost_list,NE_cost_list
+    return 0
 
 
-def computeNashEquilibria(E_cost_matrix,NE_cost_matrix):
-    E_cost_matrix = np.array(E_cost_matrix)
-    NE_cost_matrix = np.array(NE_cost_matrix)
-    game = nash.Game(E_cost_matrix,NE_cost_matrix)
-    equilibria = game.support_enumeration()
+def accelerateRewardFunction(init_veh,final_veh):
+    if final_veh.v>init_veh.v: return 1
+    else: return 0
 
-    E_policies,NE_policies = [],[]
-    for eq in equilibria:
-        E_policies.append(eq[0])
-        NE_policies.append(eq[1])
 
-    return E_policies,NE_policies
+def decelerateRewardFunction(init_veh,final_veh):
+    if final_veh.v<init_veh.v: return 1
+    else: return 0
 
 
 if __name__ == "__main__":
+    print("START HERE {}".format(datetime.datetime.now()))
     debug = False
-    lane_width = 6
+    lane_width = 8
     speed_limit = 13.9
     dt = .2
 
-    jerk = 1.1
+    #jerk = 1.1 #True value
+    jerk = 3
     accel_range = [-9,3.5]
     yaw_rate_range = [-10,10]
 
@@ -405,7 +350,7 @@ if __name__ == "__main__":
     veh2 = vehicle_classes.Car(controller=None,is_ego=False,debug=debug,label="Non-Ego",timestep=dt)
 
     sim = initialiseSimulator([veh1,veh2],speed_limit,True,[speed_limit/2,speed_limit/2],lane_width,False)
-    #sim = initialiseSimulator([veh1],speed_limit,False,[speed_limit/2],lane_width,False)
+    #sim = initialiseSimulator([veh1],speed_limit,True,[speed_limit/2],lane_width,False)
     veh2.heading = (veh2.heading+180)%360
     veh2.initialisation_params["heading"] = veh2.heading
     veh2.sense()
@@ -415,11 +360,14 @@ if __name__ == "__main__":
     veh2_traj_list = list(traj_types)
     #veh1_traj_list = [traj_classes.makeTrajectory(x,veh1.state) for x in traj_types]
     #veh2_traj_list = [traj_classes.makeTrajectory(x,veh2.state) for x in traj_types]
-    veh1_controller = gtcc.GameTheoryDrivingController(veh1,veh1_traj_list,traj_classes,other=veh2,other_traj_list=veh2_traj_list)
-    veh2_controller = gtcc.GameTheoryDrivingController(veh2,veh2_traj_list,traj_classes,other=veh1,other_traj_list=veh1_traj_list)
+    veh1_controller = gtcc.GameTheoryDrivingController(veh1,veh1_traj_list,traj_classes,goal_function=accelerateRewardFunction,other=veh2,other_traj_list=veh2_traj_list)
+    #veh1_traj_controller = TrajectoryDrivingController(veh1,traj_classes,"A",veh1.timestep)
+    #veh2_controller = gtcc.GameTheoryDrivingController(veh2,veh2_traj_list,traj_classes,goal_function=changeLaneLeftRewardFunction,other=veh1,other_traj_list=veh1_traj_list)
+    veh2_traj_controller = TrajectoryDrivingController(veh2,traj_classes,"LCL",veh2.timestep)
 
     veh1.addControllers({"game_theory":veh1_controller})
-    veh2.addControllers({"game_theory":veh2_controller})
+    #veh2.addControllers({"game_theory":veh2_controller})
+    veh2.addControllers({"game_theory":veh2_traj_controller})
 
     veh1.setController(tag="game_theory")
     veh2.setController(tag="game_theory")
@@ -429,32 +377,6 @@ if __name__ == "__main__":
     SAFE_DISTANCE = veh1.length
     MIN_FRONT_BACK_DISTANCE = veh1.length/2 + 1
     MIN_SIDE_DISTANCE = veh1.width/2 + 1
-
-#    lane_change_traj = traj_classes.makeTrajectory(traj_type,veh1.state)
-#    action_list = lane_change_traj.completeActionList(veh1.Lr+veh1.Lf,dt)
-#    dummy_traj = [(None,a) for a in action_list[:-1]]
-#
-#    followTrajectory(sim,[veh2],[dummy_traj],speed_limit)
-#
-#    print("Intended Actions")
-#    lane_change_accel = lane_change_traj.completeActionList(veh1.Lr+veh1.Lf)
-#    for i,entry in enumerate(lane_change_accel):
-#        print(f"{i}: {entry}")
-#
-#    print("Intended Velocities")
-#    lane_change_vel = lane_change_traj.completeVelocityList()
-#    for i,entry in enumerate(lane_change_vel):
-#        print(f"{i}: {entry}")
-#
-#    print("\nIntended Positions")
-#    lane_change_pos = lane_change_traj.completePositionList()
-#    for i,entry in enumerate(lane_change_pos):
-#        print(f"{i}:\t{entry}")
-#
-#    print(f"\nFinal State: {veh2.state}")
-#    exit(-1)
-#
-    #sim = initialiseSimulator([veh1],speed_limit,False,[speed_limit],False)
 
 #    init_state = defineState(veh1)
 #

@@ -52,7 +52,7 @@ class Trajectory():
             exit(-1)
         self.traj_len_t = time_len
         traj_func = {"LCL":laneChange,"LCR":laneChange,"A":velocityChange,"D":velocityChange,"NA":noAction,"ES":emergencyStop}
-        relevant_features = {"LCL": ["position","heading"],"LCR":["position","heading"],"A":["acceleration","yaw_rate"],"D":["acceleration","yaw_rate"],"NA":None,"ES":["acceleration","velocity"]}
+        relevant_features = {"LCL": ["position","heading"],"LCR":["position","heading"],"A":["acceleration","yaw_rate"],"D":["acceleration","yaw_rate"],"NA":None,"ES":["acceleration","velocity","yaw_rate"]}
         self.relevant_features = relevant_features[traj_type]
         self.line_x,self.line_y,self.traj_len_t = traj_func[traj_type](init_state,dest_state,time_len,accel_range=accel_range,jerk=jerk)
         self.computeDerivatives()

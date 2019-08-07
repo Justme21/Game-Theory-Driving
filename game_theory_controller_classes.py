@@ -15,8 +15,10 @@ class GameTheoryDrivingController():
         self.initialisation_params.update(kwargs)
 
         if goal_function is not None:
+            #Specified goal used to compute reward
             self.goal_function = goal_function
         else:
+            #No motivation
             self.goal_function = zeroFunction
 
         self.E_global_cost = None
@@ -30,19 +32,21 @@ class GameTheoryDrivingController():
         self.ego_traj_index = None
         self.ego_traj = None
 
-        self.ego_state = {}
-        self.other_state = {}
+        self.other_time_distr = None
 
 
     def setup(self,ego=None,other=None,ego_traj_list=None,other_traj_list=None):
         if ego is not None:
             self.ego = ego
+            self.ego_state = {} #gets updated in end step so neither agent has more information than the other
             self.ego_traj_list = ego_traj_list
             self.ego_preference = [1/len(ego_traj_list) for _ in ego_traj_list]
             self.initialisation_params.update({'ego': ego, 'ego_traj_list': ego_traj_list})
         if other is not None:
             self.other = other
+            self.other_state = {} #gets updated in end step so neither agent has more information than the other
             self.other_traj_list = other_traj_list
+            self.built_other_traj_list = [self.traj_builder.makeTrajectory(x,self.other.state) for x in self.other_traj_list]
             self.other_preference = [1/len(other_traj_list) for _ in other_traj_list]
             self.initialisation_params.update({'other': other, 'other_traj_list': other_traj_list})
 
@@ -51,18 +55,32 @@ class GameTheoryDrivingController():
         #We maintain an estimate of both agents preferences in order to approximate a perspective
         #common to both agents
 
+        if self.other_time_distr is None:
+            max_timesteps = int(max([x.traj_len_t/self.other.timestep for x in self.built_other_traj_list]))
+            self.other_time_distr = [1/max_timesteps for _ in range(max_timesteps+1)]
+            #self.other_time_distr = [.99] + [.01/(max_timesteps-1) for _ in range(max_timesteps)]
+
         if self.ego_traj is None:
             self.built_ego_traj_list = [self.traj_builder.makeTrajectory(x,self.ego.state) for x in self.ego_traj_list]
-            self.built_other_traj_list = [self.traj_builder.makeTrajectory(x,self.other.state) for x in self.other_traj_list]
 
             #Compute the costs each agent experiences based on the assumption that both agents obey the rules of
             # the road and don't want to crash
             # This reward matrix does not include individual preferences of either agents
-            self.E_global_cost,self.NE_global_cost = computeGlobalCostMatrix(self.t,self.ego,self.built_ego_traj_list,self.other,self.built_other_traj_list)
+            self.E_global_cost,self.NE_global_cost = computeGlobalCostMatrix(self.t,self.ego,self.built_ego_traj_list,self.other,self.built_other_traj_list,self.other_time_distr)
 
-        if self.t !=0:
+        if self.t != 0:
+            self.other_time_distr = updateTimeDistr(self.other,self.other_state,self.built_other_traj_list,self.other_preference,self.other_time_distr,self.other.timestep)
+            #arbitrary threshold. If the probability that they are at the final time of trajectory is more than threwshold then recostruct the trajectories
+            likely_traj = [self.built_other_traj_list[x] for x in range(len(self.built_other_traj_list)) if self.other_preference[x] == max(self.other_preference)][0]
+            likely_other_t = min([x*self.other.timestep for x,prob in enumerate(self.other_time_distr) if prob == max(self.other_time_distr)])
+            if self.other_time_distr[int(likely_traj.traj_len_t/self.other.timestep)]>.9:
+                print(f"Rebuilding Trajectories for {self.other.label}")
+                self.built_other_traj_list = [self.traj_builder.makeTrajectory(x,self.other.state) for x in self.other_traj_list]
+                self.E_global_cost,self.NE_global_cost = computeGlobalCostMatrix(self.t,self.ego,self.built_ego_traj_list,self.other,self.built_other_traj_list,self.other_time_distr)
             self.ego_preference = updatePreference(self.t,self.ego,self.ego_state,self.built_ego_traj_list,self.ego_preference)
-            self.other_preference = updatePreference(self.t,self.other,self.other_state,self.built_other_traj_list,self.other_preference)
+            self.other_preference = updatePreference(likely_other_t,self.other,self.other_state,self.built_other_traj_list,self.other_preference)
+            print("\n\HEREHERHERHERHER Other time distribution for {} is: {}".format(self.other_time_distr,self.other.label))
+
 
         #First step we will estimate the cost matrix that NE estimates in order to determine what they
         #  are motivated to do.
@@ -157,7 +175,7 @@ class GameTheoryDrivingController():
         for ego_traj in ego_traj_choices:
             new_row = []
             for other_traj in self.built_other_traj_list:
-                val,_ = computeReward(self.t,self.ego.copy(),ego_traj,self.other.copy(),other_traj,veh1_reward_function=self.goal_function)
+                val,_ = computeReward(self.t,self.ego.copy(),ego_traj,self.other.copy(),other_traj,self.other_time_distr,veh1_reward_function=self.goal_function)
                 print("Reward to ego for performing {} when NE performs {} is {}".format(ego_traj.label,other_traj.label,val))
                 new_row.append(val)
 
@@ -313,28 +331,59 @@ def updatePreference(t,veh,veh_state,veh_traj_list,veh_pref):
     return new_pref
 
 
-def mostLikelyTime(veh,veh_state,traj,dt):
-    t = 0
-    max_prob,t_max = None,None
-    while t<traj.traj_len_t:
-        traj_state = getState(veh,traj,t)
-        prob = computeSimilarity(veh_state,traj_state)
-        if max_prob is None or prob>max_prob:
-            max_prob = prob
-            max_t = t
+def updateTimeDistr(veh,veh_state,traj_list,traj_preference,time_distr,dt):
+    new_distr = []
+    num_sum = 0
+    #state is updated at the end of each iteration of the simulation. If state is {} then in first iteration
+    # so can't update as we have no prior observations
+    state = veh_state
+    if state != {}:
+        #P(t|state) = \sum_{t_old}\sum_{traj}P(t|t_old)*P(t_old|state}*P(traj|state)
+        prob_t_given_t_old_complete = []
+        for i in range(len(time_distr)):
+            prob_t_given_t_old = []
+            #Compute P(t|t_old)
+            t_old = i*dt
+            for j in range(len(traj_list)):
+                traj = traj_list[j]
+                prob_t_given_t_old_traj = []
+                for k in range(len(time_distr)):
+                    t = k*dt
+                    prob_t_given_t_old_traj.append(math.exp(-3*abs(t-(t_old+dt)%(traj.traj_len_t+dt))/dt))
+                norm_sum = sum(prob_t_given_t_old_traj)
+                prob_t_given_t_old_traj = [x/norm_sum for x in prob_t_given_t_old_traj]
+                prob_t_given_t_old.append(list(prob_t_given_t_old_traj))
+            print(f"If t_old is {t_old} then P(t|t_old) = {prob_t_given_t_old_traj}")
+            prob_t_given_t_old_complete.append(list(prob_t_given_t_old))
 
-        t += dt
-    return max_t
+        print("\n")
+        for i in range(len(time_distr)):
+            #Compute P(t|state)
+            new_distr_val = 0
+            for j in range(len(traj_preference)):
+                for k in range(len(time_distr)):
+                    #print("T: {}\tP(traj): {}\tT_old: {}\tP(t_old): {}\tP(T|All): {}".format(i*dt,traj_preference[j],k*dt,time_distr[k],prob_t_given_t_old_complete[k][j][i]*time_distr[k]*traj_preference[j]))
+                    print("T: {}\tP(traj): {}\tT_old: {}\tP(t_old): {}\tP(T|All): {}".format(i*dt,traj_preference[j],k*dt,time_distr[k],prob_t_given_t_old_complete[k][j][i]))
+                    new_distr_val += prob_t_given_t_old_complete[k][j][i]*time_distr[k]*traj_preference[j]
+            num_sum += new_distr_val
+            new_distr.append(new_distr_val)
+        new_distr = [x/num_sum for x in new_distr]
+        print("\nOld time distr was {}, new distr is: {}".format(time_distr,new_distr))
+        print("Traj Preference is: {}".format(traj_preference))
+    else:
+        new_distr = list(time_distr)
+
+    return new_distr
 
 
-def computeReward(init_t1,veh1,traj1,veh2,traj2,veh1_reward_function=None):
+def computeReward(init_t1,veh1,traj1,veh2,traj2,veh2_time_distr,veh1_reward_function=None):
     print("\nComputing Reward: {} performing: {}, {} Performing {}".format(veh1.label,traj1.label,veh2.label,traj2.label))
     init_veh1 = veh1.copy()
 
     r1 = 0
     r2 = 0
 
-    init_t2 = mostLikelyTime(veh2,veh2.state,traj2,veh2.timestep)
+    init_t2 = min([i for i,prob in enumerate(veh2_time_distr) if prob == max(veh2_time_distr)])*veh2.timestep
     print("Init_t1 is {}\tInit_t2 is: {}".format(init_t1,init_t2))
 
     #NOTE: COME BACK TO THIS LATER AND COME UP WITH A BETTER WAY OF ESTIMATING RADIUS. SHOULD INCREASE OVER TIME AS ESTIMATION CERTAINTY DECREASES
@@ -377,13 +426,13 @@ def computeReward(init_t1,veh1,traj1,veh2,traj2,veh1_reward_function=None):
     return r1,r2
 
 
-def computeGlobalCostMatrix(t,veh1,veh1_traj_list,veh2,veh2_traj_list):
+def computeGlobalCostMatrix(t,veh1,veh1_traj_list,veh2,veh2_traj_list,veh2_time_distr):
     E_cost_list = [[0 for _ in veh2_traj_list] for _ in veh1_traj_list]
     NE_cost_list = [[0 for _ in veh1_traj_list] for _ in veh2_traj_list]
     for i,E_traj in enumerate(veh1_traj_list):
         for j,NE_traj in enumerate(veh2_traj_list):
             #print("E doing: {}\tNE doing: {}".format(E_traj,NE_traj))
-            E_cost_list[i][j],NE_cost_list[j][i] = computeReward(t,veh1.copy(),E_traj,veh2.copy(),NE_traj)
+            E_cost_list[i][j],NE_cost_list[j][i] = computeReward(t,veh1.copy(),E_traj,veh2.copy(),NE_traj,veh2_time_distr)
 
     return E_cost_list,NE_cost_list
 

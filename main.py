@@ -33,23 +33,23 @@ def initialiseSimulator(cars,speed_limit,graphics,init_speeds,lane_width=None,da
     else:
         car_speeds = init_speeds
 
-    num_junctions = 5
-    num_roads = 4
-    road_angles = [90,90,90,90]
-    road_lengths = [4,53,4,100] #Shorter track for generating results
-    junc_pairs = [(0,1),(1,2),(2,3),(3,4)]
+    num_junctions = 3
+    num_roads = 2
+    road_angles = [90,90]
+    road_lengths = [4,156] #Shorter track for generating results
+    junc_pairs = [(0,1),(1,2)]
 
     starts = [[(0,1),1],[(0,1),0]] #Follower car is initialised on the first road, leading car on the 3rd (assuring space between them)
-    dests = [[(3,4),0],[(3,4),0]] #Simulation ends when either car passes the end of the 
+    dests = [[(1,2),0],[(1,2),0]] #Simulation ends when either car passes the end of the 
 
     run_graphics = graphics
     draw_traj = False #trajectories are uninteresting by deafault
     debug = False #don't want debug mode
 
-    runtime = 120.0 #max runtime; simulation will terminate if run exceeds this length of time
+    runtime = 4.7 #120.0 #max runtime; simulation will terminate if run exceeds this length of time
 
     #Initialise the simulator object, load vehicles into the simulation, then initialise the action simulation
-    sim = simulator.Simulator(run_graphics,draw_traj,runtime,debug,dt=.1)
+    sim = simulator.Simulator(run_graphics,draw_traj,runtime,debug,dt=cars[0].timestep)
     sim.loadCars(cars)
 
     sim.initialiseSimulator(num_junctions,num_roads,road_angles,road_lengths,junc_pairs,\
@@ -305,17 +305,31 @@ def obstacleInteractionCost(ego_state,obstacle_state):
 
 
 def changeLaneLeftRewardFunction(init_veh,final_veh):
+    is_complete = False
+    for obj in init_veh.on:
+        #If car already on left lane no further incentives
+        if isinstance(obj,road_classes.Lane) and obj.is_top_up:
+            is_complete = True
+            break
+
     for obj in final_veh.on:
         if isinstance(obj,road_classes.Lane):
-            if obj.is_top_up: return 1
-
+            if not is_complete and obj.is_top_up and abs(obj.direction-final_veh.heading)<.1: return 1
+            if is_complete and not obj.is_top_up: return -1
     return 0
 
 
 def changeLaneRightRewardFunction(init_veh,final_veh):
+    is_complete = False
+    for obj in init_veh.on:
+        if isinstance(obj,road_classes.Lane) and not obj.is_top_up:
+            is_complete = True
+            break
+
     for obj in final_veh.on:
         if isinstance(obj,road_classes.Lane):
-            if not obj.is_top_up: return 1
+            if not is_complete and not obj.is_top_up and abs(obj.direction-final_veh.heading)<.1: return 1
+            if is_complete and obj.is_top_up: return -1
 
     return 0
 
@@ -333,46 +347,58 @@ def decelerateRewardFunction(init_veh,final_veh):
 if __name__ == "__main__":
     print("START HERE {}".format(datetime.datetime.now()))
     debug = False
+    graphics = True
     lane_width = 8
     speed_limit = 13.9
     dt = .2
 
     #jerk = 1.1 #True value
-    jerk = 3
+    jerk = 5
     accel_range = [-9,3.5]
     yaw_rate_range = [-10,10]
 
     time_len = 3
     traj_classes = TrajectoryClasses(time_len=time_len,lane_width=lane_width,accel_range=accel_range,jerk=jerk)
+    traj_classes_2 = TrajectoryClasses(time_len=1.2*time_len,lane_width=lane_width,accel_range=accel_range,jerk=jerk)
     traj_types = traj_classes.traj_types.keys()
 
     veh1 = vehicle_classes.Car(controller=None,is_ego=True,debug=debug,label="Ego",timestep=dt)
     veh2 = vehicle_classes.Car(controller=None,is_ego=False,debug=debug,label="Non-Ego",timestep=dt)
 
-    sim = initialiseSimulator([veh1,veh2],speed_limit,True,[speed_limit/2,speed_limit/2],lane_width,False)
+    sim = initialiseSimulator([veh1,veh2],speed_limit,graphics,[speed_limit/2,speed_limit/2],lane_width,False)
     #sim = initialiseSimulator([veh1],speed_limit,True,[speed_limit/2],lane_width,False)
     veh2.heading = (veh2.heading+180)%360
+    veh2.y_com  = veh1.y_com
+    veh2.initialisation_params["prev_disp_y"] = veh1.initialisation_params["prev_disp_y"]
     veh2.initialisation_params["heading"] = veh2.heading
     veh2.sense()
 
     #const_vel_controller = lcc.DrivingController("constant",speed_limit=speed_limit)
     veh1_traj_list = list(traj_types)
     veh2_traj_list = list(traj_types)
+    #veh1_traj_list.remove("ES")
+    #veh2_traj_list.remove("ES")
     #veh1_traj_list = [traj_classes.makeTrajectory(x,veh1.state) for x in traj_types]
     #veh2_traj_list = [traj_classes.makeTrajectory(x,veh2.state) for x in traj_types]
-    veh1_controller = gtcc.GameTheoryDrivingController(veh1,veh1_traj_list,traj_classes,goal_function=accelerateRewardFunction,other=veh2,other_traj_list=veh2_traj_list)
-    #veh1_traj_controller = TrajectoryDrivingController(veh1,traj_classes,"A",veh1.timestep)
-    #veh2_controller = gtcc.GameTheoryDrivingController(veh2,veh2_traj_list,traj_classes,goal_function=changeLaneLeftRewardFunction,other=veh1,other_traj_list=veh1_traj_list)
-    veh2_traj_controller = TrajectoryDrivingController(veh2,traj_classes,"LCL",veh2.timestep)
+    #veh1_controller = gtcc.GameTheoryDrivingController(veh1,veh1_traj_list,traj_classes,other=veh2,other_traj_list=veh2_traj_list)
+    #veh1_controller = gtcc.GameTheoryDrivingController(veh1,veh1_traj_list,traj_classes,goal_function=accelerateRewardFunction,other=veh2,other_traj_list=veh2_traj_list,write=False)
+    veh1_traj_controller = TrajectoryDrivingController(veh1,traj_classes,"LCR",veh1.timestep,write=True)
+    veh2_controller = gtcc.GameTheoryDrivingController(veh2,veh2_traj_list,traj_classes,goal_function=changeLaneLeftRewardFunction,other=veh1,other_traj_list=veh1_traj_list,write=True)
+    #veh2_traj_controller = TrajectoryDrivingController(veh2,traj_classes,"LCL",veh2.timestep)
 
-    veh1.addControllers({"game_theory":veh1_controller})
-    #veh2.addControllers({"game_theory":veh2_controller})
-    veh2.addControllers({"game_theory":veh2_traj_controller})
+    veh1.addControllers({"game_theory":veh1_traj_controller})
+    veh2.addControllers({"game_theory":veh2_controller})
 
     veh1.setController(tag="game_theory")
     veh2.setController(tag="game_theory")
 
     sim.runComplete()
+
+    if veh1_traj_controller.write:
+        veh1_traj_controller.closeFiles()
+    if veh2_controller.write:
+        veh2_controller.closeFiles()
+    print("Files are closed")
 
     SAFE_DISTANCE = veh1.length
     MIN_FRONT_BACK_DISTANCE = veh1.length/2 + 1

@@ -24,25 +24,28 @@ class TrajectoryClasses():
     def __init__(self,time_len=1,lane_width=6,accel_range=[-2,2],jerk=1):
         self.traj_len = time_len
         self.traj_types = {"LCR":{"position":(lane_width,0)},"LCL":{"position":(-lane_width,0)},\
-                "A": {"acceleration":1},"D":{"acceleration":-1},"NA":{},"ES":{}}
+                "A": {"acceleration":1},"D":{"acceleration":-1},"NA": {},"ES":{}}
 
         self.boundary_constraints = {"accel_range":accel_range,"jerk":jerk}
 
 
-    def makeTrajectory(self,traj_key,cur_state):
+    def makeTrajectory(self,traj_key,cur_state,dest_state=None,time_len=None):
         heading = math.radians(cur_state["heading"]) #this might be the wrong way to incorporate orientation. Revise later maybe
         orient = (math.sin(heading),math.cos(heading)) #Adjustments perpendicular to current heading
 
-        dest_state = dict(cur_state)
-        state_change = self.traj_types[traj_key]
-        for entry in state_change:
-            if isinstance(dest_state[entry],numbers.Number): dest_state[entry] += state_change[entry]
-            else:
-                if entry is "position": coef = orient
-                else: coef = [1 for _ in dest_state[entry]]
-                dest_state[entry] = tuple([x + coef[i]*state_change[entry][i] for i,x in enumerate(dest_state[entry])])
+        if dest_state is None:
+            dest_state = dict(cur_state)
+            state_change = self.traj_types[traj_key]
+            for entry in state_change:
+                if isinstance(dest_state[entry],numbers.Number): dest_state[entry] += state_change[entry]
+                else:
+                    if entry is "position": coef = orient
+                    else: coef = [1 for _ in dest_state[entry]]
+                    dest_state[entry] = tuple([x + coef[i]*state_change[entry][i] for i,x in enumerate(dest_state[entry])])
 
-        return Trajectory(traj_key,cur_state,dest_state,self.traj_len,**self.boundary_constraints)
+        if time_len is None: time_len = self.traj_len
+
+        return Trajectory(traj_key,cur_state,dest_state,time_len,**self.boundary_constraints)
 
 
 class Trajectory():
@@ -52,7 +55,8 @@ class Trajectory():
             exit(-1)
         self.traj_len_t = time_len
         traj_func = {"LCL":laneChange,"LCR":laneChange,"A":velocityChange,"D":velocityChange,"NA":noAction,"ES":emergencyStop}
-        relevant_features = {"LCL": ["position","heading"],"LCR":["position","heading"],"A":["acceleration","yaw_rate"],"D":["acceleration","yaw_rate"],"NA":None,"ES":["acceleration","velocity","yaw_rate"]}
+        #relevant_features = {"LCL": ["position","heading","yaw_rate"],"LCR":["position","heading","yaw_rate"],"A":["velocity","acceleration","yaw_rate"],"D":["velocity","acceleration","yaw_rate"],"NA":["velocity","acceleration","yaw_rate"],"ES":["velocity","acceleration","yaw_rate"]}
+        relevant_features = {"LCL": None,"LCR": None,"A": None,"D": None,"NA": None,"ES":None}
         self.relevant_features = relevant_features[traj_type]
         self.line_x,self.line_y,self.traj_len_t = traj_func[traj_type](init_state,dest_state,time_len,accel_range=accel_range,jerk=jerk)
         self.computeDerivatives()
@@ -122,14 +126,19 @@ class Trajectory():
         return heading
 
 
-    def state(self,t):
+    def state(self,t,axle_length=None):
         """Returns the estimated state at a known timepoint along the trajectory.
            ACtion omitted as this would require vehicle axle length"""
         posit = self.position(t)
         vel = self.velocity(t)
         heading = self.heading(t)
 
-        state = {"position":posit,"velocity":vel,"heading":heading}
+        if axle_length is not None:
+            acceleration,yaw_rate = self.action(t,axle_length)
+        else:
+            acceleration,yaw_rate = None,None
+
+        state = {"position":posit,"velocity":vel,"heading":heading,"acceleration":acceleration,"yaw_rate":yaw_rate}
         return state
 
 
@@ -278,6 +287,7 @@ def velocityChange(init_state,dest_state,time_len,accel_range,jerk,**kwargs):
         #if jerk<limit: B = jerk
         #else: B = limit
     else:
+        #B = jerk
         B = jerk
         #if limit>-jerk: B = limit
         #else: B = jerk

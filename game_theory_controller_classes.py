@@ -72,8 +72,8 @@ class GameTheoryDrivingController():
         #We maintain an estimate of both agents preferences in order to approximate a perspective
         #common to both agents
 
-        print("\nEgo State: {}".format(self.ego.state))
-        print("Non-Ego State: {}\n".format(self.other.state))
+        #print("\nEgo State: {}".format(self.ego.state))
+        #print("Non-Ego State: {}\n".format(self.other.state))
 
         if self.other_time_distr is None:
             max_timesteps = int(max([x.traj_len_t/self.other.timestep for x in self.built_other_traj_list]))
@@ -82,7 +82,7 @@ class GameTheoryDrivingController():
             self.other_time_distr = [x/sum(self.other_time_distr) for x in self.other_time_distr]
 
         if self.ego_traj is None:
-            print("Ego is resetting trajectories")
+            #print("Ego is resetting trajectories")
             self.built_ego_traj_list = [self.traj_builder.makeTrajectory(x,self.ego.state) for x in self.ego_traj_list]
 
             #Compute the costs each agent experiences based on the assumption that both agents obey the rules of
@@ -97,7 +97,7 @@ class GameTheoryDrivingController():
             if likely_other_t == 0:
                 #If most likely time is 0 then we believe other agent must have completed their last trajectory. Therefore we rebuild new trajectories based on the assumption they
                 # must choose a new one
-                print(f"Rebuilding Trajectories for {self.other.label}")
+                #print(f"Rebuilding Trajectories for {self.other.label}")
                 self.built_other_traj_list = [self.traj_builder.makeTrajectory(x,self.other.state) for x in self.other_traj_list]
                 self.E_global_cost,self.NE_global_cost = computeGlobalCostMatrix(self.t,self.ego,self.built_ego_traj_list,self.other,self.built_other_traj_list,self.other_time_distr)
             self.ego_preference = updatePreference(self.t,self.ego,self.ego_state,self.built_ego_traj_list,self.ego_preference)
@@ -128,20 +128,20 @@ class GameTheoryDrivingController():
         # NE is rational and the assumption that the preferences have been correctly estimated
         E_policies,NE_policies = computeNashEquilibria(E_cost_estimate,NE_cost_estimate)
 
-        print(f"\n\nSelecting Action for {self.ego.label}")
-        print(f"\nPreferences are: \t\t{self.ego_traj_list}\nEgo: \t{self.ego_preference}\nNon-Ego: \t{self.other_preference}\n")
-        print("E Cost Estimate:")
-        for row in E_cost_estimate:
-            print(row)
+        #print(f"\n\nSelecting Action for {self.ego.label}")
+        #print(f"\nPreferences are: \t\t{self.ego_traj_list}\nEgo: \t{self.ego_preference}\nNon-Ego: \t{self.other_preference}\n")
+        #print("E Cost Estimate:")
+        #for row in E_cost_estimate:
+        #    print(row)
 
-        print("\nNE Cost Estimate")
-        for row in NE_cost_estimate:
-            print(row)
-        print("\n")
+        #print("\nNE Cost Estimate")
+        #for row in NE_cost_estimate:
+        #    print(row)
+        #print("\n")
 
-        print("NE believes optimal policies are")
-        for i,(E_pol,NE_pol) in enumerate(zip(E_policies,NE_policies)):
-            print(f"{i}: {E_pol}\t{NE_pol}")
+        #print("NE believes optimal policies are")
+        #for i,(E_pol,NE_pol) in enumerate(zip(E_policies,NE_policies)):
+        #    print(f"{i}: {E_pol}\t{NE_pol}")
 
 
         #BASED ON THE POLICIES THAT MAXIMISE NE'S EXPECTED PAYOFF E MUST NOW DETERMINE THEIR
@@ -225,23 +225,23 @@ class GameTheoryDrivingController():
                         dummy_trajectories = [self.traj_builder.makeTrajectory(x,dummy_ego.state) for x in self.ego_traj_list if x!=orig_label]
                         #max_possible_reward = max([computeReward(0,dummy_ego.copy(),x,dummy_other.copy(),other_traj,dummy_time_distr,veh1_reward_function=self.goal_function)[0] for x in dummy_trajectories])
                         possible_rewards = [computeReward(0,dummy_ego.copy(),x,dummy_other.copy(),other_traj,dummy_time_distr,veh1_reward_function=self.goal_function)[0] for x in dummy_trajectories]
-                        print("Possible Rewards for {} are: {}".format(self.ego.label,possible_rewards))
+                        #print("Possible Rewards for {} are: {}".format(self.ego.label,possible_rewards))
                         max_possible_reward = max(possible_rewards)
                         val_e += (.9**(ego_traj.traj_len_t-self.t))*max_possible_reward
-                    print("Reward to E ({}) for performing {} when NE ({}) performs {} is {}".format(self.ego.label,ego_traj.label,self.other.label,other_traj.label,val_e))
+                    #print("Reward to E ({}) for performing {} when NE ({}) performs {} is {}".format(self.ego.label,ego_traj.label,self.other.label,other_traj.label,val_e))
                     #new_row.append(val_other)
                     new_row.append(val_e)
                 else:
-                    print("E: {} NE: {} results in death for {}".format(ego_traj.label,other_traj.label,self.ego.label))
+                    #print("E: {} NE: {} results in death for {}".format(ego_traj.label,other_traj.label,self.ego.label))
                     new_row.append(-1)
-                    print("Reward to ego for performing {} when NE performs {} is {}".format(ego_traj.label,other_traj.label,-1))
+                    #print("Reward to ego for performing {} when NE performs {} is {}".format(ego_traj.label,other_traj.label,-1))
                 #new_row.append(val)
 
             E_cost_second_estimate.append(list(new_row))
 
-        print("\n\nE's true estimate of the cost")
-        for row in E_cost_second_estimate:
-            print(row)
+        #print("\n\nE's true estimate of the cost")
+        #for row in E_cost_second_estimate:
+        #    print(row)
 
 
         #expected_payoffs = []
@@ -271,9 +271,9 @@ class GameTheoryDrivingController():
                 payoff += [ep]
             expected_payoffs.append(list(payoff))
 
-        print("\nE's expected payoff for each strategy")
-        for entry in expected_payoffs:
-            print(entry)
+        #print("\nE's expected payoff for each strategy")
+        #for entry in expected_payoffs:
+        #    print(entry)
 
 
         #We identify the trajectory for E that would have the highest expected value
@@ -290,25 +290,25 @@ class GameTheoryDrivingController():
 
         chosen_traj = ego_traj_choices[max_index]
 
-        print("\nChoosing {} with expected reward {}".format(chosen_traj.label,max_ep))
+        #print("\nChoosing {} with expected reward {}".format(chosen_traj.label,max_ep))
         if chosen_traj != self.ego_traj:
-            if self.ego_traj is not None:
-                print("Ego proposing to change from {} to {}".format(self.ego_traj.label,chosen_traj.label))
-            else:
-                print("Ego proposing to change to {}".format(chosen_traj.label))
+            #if self.ego_traj is not None:
+            #    print("Ego proposing to change from {} to {}".format(self.ego_traj.label,chosen_traj.label))
+            #else:
+            #    print("Ego proposing to change to {}".format(chosen_traj.label))
             self.t = 0
             self.ego_traj = chosen_traj
 
-            print("\nPrinting Proposed New Trajectory: {}".format(self.ego_traj.label))
-            printTrajectory(self.ego,self.ego_traj,self.ego.timestep)
+            #print("\nPrinting Proposed New Trajectory: {}".format(self.ego_traj.label))
+            #printTrajectory(self.ego,self.ego_traj,self.ego.timestep)
 
 
         action = self.ego_traj.action(self.t,self.ego.Lf+self.ego.Lr)
         self.t += self.ego.timestep
 
-        print("\nReturning Accel: {}\tYaw Rate: {}\n".format(action[0],action[1]))
+        #print("\nReturning Accel: {}\tYaw Rate: {}\n".format(action[0],action[1]))
         if self.t>self.ego_traj.traj_len_t:
-            print("\n{} Reached the end of the trajectory. Resetting Trajectory\n\n\n".format(self.ego.label))
+            #print("\n{} Reached the end of the trajectory. Resetting Trajectory\n\n\n".format(self.ego.label))
             self.ego_traj = None
             self.t = 0
 
@@ -364,7 +364,7 @@ def printTrajectory(veh,traj,timestep):
 
 def initialiseFile(filename,ego_name,timestep,data_labels):
     date = datetime.datetime.now()
-    file = open(filename+"{}_{}.txt".format(date.hour,date.minute),"a")
+    file = open(filename+"-{}-{}_{}.txt".format(ego_name,date.hour,date.minute),"a")
     file.write("Ego is: {}\n".format(ego_name))
     file.write("Timestep Size: {}\n".format(timestep))
     if data_labels is not None:
@@ -517,14 +517,14 @@ def computeReward(init_t1,veh1,traj1,veh2,traj2,veh2_time_distr,veh1_reward_func
 
         #print("At time {} on {} traj {} and time {} on {} traj {}".format(init_t1+t,veh1.label,traj1.label,init_t2+t,veh2.label,traj2.label))
         if computeDistance((veh1.x_com,veh1.y_com),(collision_car.x_com,collision_car.y_com))<radius:
-            print("Cars have Crashed")
+            #print("Cars have Crashed")
             r1 = -1
             r2 = -1
             break
         t += veh1.timestep
 
     if r1 != -1:
-        print("No Crash found")
+        #print("No Crash found")
 
         putCarOnTraj(veh1,traj1,traj1.traj_len_t)
         putCarOnTraj(veh2,traj2,traj2.traj_len_t)
@@ -539,12 +539,12 @@ def computeReward(init_t1,veh1,traj1,veh2,traj2,veh2_time_distr,veh1_reward_func
         #print("\n")
 
         if veh1.on == [] or checkForLaneCrossing(veh1):
-            print("Veh {} has gone off road: Position: {}".format(veh1.label,veh1.state["position"]))
-            print(f"{veh1.label} is on {[x.label for x in veh1.on]}")
+            #print("Veh {} has gone off road: Position: {}".format(veh1.label,veh1.state["position"]))
+            #print(f"{veh1.label} is on {[x.label for x in veh1.on]}")
             r1 = -1 # not on anything => bad outcome
         if veh2.on == [] or checkForLaneCrossing(veh2):
-            print("Veh {} has gone off road: Position: {}".format(veh2.label,veh2.state["position"]))
-            print(f"{veh2.label} is on {[x.label for x in veh2.on]}")
+            #print("Veh {} has gone off road: Position: {}".format(veh2.label,veh2.state["position"]))
+            #print(f"{veh2.label} is on {[x.label for x in veh2.on]}")
             r2 = -1 #discourage stopping trajectory while crossing lanes
 
         if veh1_reward_function is not None and r1!=-1:

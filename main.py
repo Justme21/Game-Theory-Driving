@@ -36,7 +36,8 @@ def initialiseSimulator(cars,speed_limit,graphics,init_speeds,lane_width=None,da
     num_junctions = 3
     num_roads = 2
     road_angles = [90,90]
-    road_lengths = [4,156] #Shorter track for generating results
+    #road_lengths = [4,156] #Shorter track for generating results
+    road_lengths = [4,60] #Shorter track for generating results
     junc_pairs = [(0,1),(1,2)]
 
     starts = [[(0,1),1],[(0,1),0]] #Follower car is initialised on the first road, leading car on the 3rd (assuring space between them)
@@ -46,7 +47,7 @@ def initialiseSimulator(cars,speed_limit,graphics,init_speeds,lane_width=None,da
     draw_traj = False #trajectories are uninteresting by deafault
     debug = False #don't want debug mode
 
-    runtime = 4.7 #120.0 #max runtime; simulation will terminate if run exceeds this length of time
+    runtime = 7 #120.0 #max runtime; simulation will terminate if run exceeds this length of time
 
     #Initialise the simulator object, load vehicles into the simulation, then initialise the action simulation
     sim = simulator.Simulator(run_graphics,draw_traj,runtime,debug,dt=cars[0].timestep)
@@ -362,8 +363,8 @@ if __name__ == "__main__":
     traj_classes_2 = TrajectoryClasses(time_len=1.2*time_len,lane_width=lane_width,accel_range=accel_range,jerk=jerk)
     traj_types = traj_classes.traj_types.keys()
 
-    veh1 = vehicle_classes.Car(controller=None,is_ego=True,debug=debug,label="Ego",timestep=dt)
-    veh2 = vehicle_classes.Car(controller=None,is_ego=False,debug=debug,label="Non-Ego",timestep=dt)
+    veh1 = vehicle_classes.Car(controller=None,is_ego=False,debug=debug,label="Ego",timestep=dt)
+    veh2 = vehicle_classes.Car(controller=None,is_ego=True,debug=debug,label="Non-Ego",timestep=dt)
 
     sim = initialiseSimulator([veh1,veh2],speed_limit,graphics,[speed_limit/2,speed_limit/2],lane_width,False)
     #sim = initialiseSimulator([veh1],speed_limit,True,[speed_limit/2],lane_width,False)
@@ -373,6 +374,8 @@ if __name__ == "__main__":
     veh2.initialisation_params["heading"] = veh2.heading
     veh2.sense()
 
+    sim.drawSimulation()
+
     #const_vel_controller = lcc.DrivingController("constant",speed_limit=speed_limit)
     veh1_traj_list = list(traj_types)
     veh2_traj_list = list(traj_types)
@@ -381,10 +384,10 @@ if __name__ == "__main__":
     #veh1_traj_list = [traj_classes.makeTrajectory(x,veh1.state) for x in traj_types]
     #veh2_traj_list = [traj_classes.makeTrajectory(x,veh2.state) for x in traj_types]
     #veh1_controller = gtcc.GameTheoryDrivingController(veh1,veh1_traj_list,traj_classes,other=veh2,other_traj_list=veh2_traj_list)
-    #veh1_controller = gtcc.GameTheoryDrivingController(veh1,veh1_traj_list,traj_classes,goal_function=accelerateRewardFunction,other=veh2,other_traj_list=veh2_traj_list,write=False)
+    #veh1_controller = gtcc.GameTheoryDrivingController(veh1,veh1_traj_list,traj_classes,goal_function=changeLaneRightRewardFunction,other=veh2,other_traj_list=veh2_traj_list,write=False)
     veh1_traj_controller = TrajectoryDrivingController(veh1,traj_classes,"LCR",veh1.timestep,write=True)
-    veh2_controller = gtcc.GameTheoryDrivingController(veh2,veh2_traj_list,traj_classes,goal_function=changeLaneLeftRewardFunction,other=veh1,other_traj_list=veh1_traj_list,write=True)
-    #veh2_traj_controller = TrajectoryDrivingController(veh2,traj_classes,"LCL",veh2.timestep)
+    veh2_controller = gtcc.GameTheoryDrivingController(veh2,veh2_traj_list,traj_classes,goal_function=changeLaneLeftRewardFunction,other=veh1,other_traj_list=veh1_traj_list,write=False)
+    #veh2_traj_controller = TrajectoryDrivingController(veh2,traj_classes,"LCL",veh2.timestep,write=True)
 
     veh1.addControllers({"game_theory":veh1_traj_controller})
     veh2.addControllers({"game_theory":veh2_controller})
@@ -403,99 +406,3 @@ if __name__ == "__main__":
     SAFE_DISTANCE = veh1.length
     MIN_FRONT_BACK_DISTANCE = veh1.length/2 + 1
     MIN_SIDE_DISTANCE = veh1.width/2 + 1
-
-#    init_state = defineState(veh1)
-#
-#    goal_state = specifyState(position=veh1.waypoints[-1],velocity=speed_limit,heading=None,acceleration=None,yaw_rate=None,cost=0)
-#
-#    weights = {"position":1/computeDistance(init_state["position"],goal_state["position"]),\
-#                "velocity":1/computeDistance(init_state["velocity"],goal_state["velocity"]),\
-#                "x_com": -10/(sim.roads[0].width/4),"cost":-10000000,"can_go":1}
-#
-#    roads = sim.roads
-#    bl,tr = None,None
-#    for entry in roads:
-#        if bl is None or entry.four_corners["back_left"][1]>=bl[1]:
-#            if bl is None or entry.four_corners["back_left"][0]<=bl[0]:
-#                bl = entry.four_corners["back_left"]
-#
-#        if tr is None or entry.four_corners["front_right"][1]<=tr[1]:
-#            if tr is None or entry.four_corners["front_right"][0]>=tr[0]:
-#                tr = entry.four_corners["front_right"]
-#
-#    domain = {"position":((bl[0],tr[0]),(tr[1],bl[1])),"velocity":(0,speed_limit),"can_go":(1,1)}
-#
-#    cost = cost_function_classes.CostFunction(nodeDistance,compareDistsALT,cd_weights=weights)
-#
-#    trajectory = []
-#
-#    t1 = time.time()
-#
-#    step_count = 0
-#
-#    #while computeDistance(veh1.state["position"],goal_state["position"])>1 and veh1.y_com>goal_state["position"][1]:
-#    while max([x for x in nodeDistance(defineState(veh1),goal_state,weights).values()])>.01:
-#    #while computeDistance(veh1.state["position"],goal_state["position"])>1 and veh1.y_com>goal_state["position"][1]:
-#    #for _ in range(100):
-#        #print("Distances from Goal: {}".format(nodeDistance(defineState(veh1),goal_state,weights)))
-#        init_state = defineState(veh1)
-#        tree = rrt_planner.Tree(domain,cost,defineState,init_state,goal_state,dt=veh1.timestep,epsilon=epsilon)
-#
-#        #rrt_planner.addNodesToTree(tree,veh1.copy(),num_timesteps,num_nodes)
-#        rrt_planner.addNodesToTree(tree,veh1.copy(),num_timesteps,num_nodes,max_foresight=False) #use None for num_timesteps to randomise number of timesteps
-#
-#
-#        j = 0
-#        #a_list = []
-#        #best_traj = rrt_planner.pathOfLeastCost(tree)
-#        #while len(a_list) <= 1 and j<num_timesteps:
-#        #while len(best_traj) == 1 and j<num_timesteps:
-#        while len(tree.nodes)<num_nodes and j<num_timesteps:
-#            tree = rrt_planner.Tree(domain,cost,defineState,init_state,goal_state,dt=veh1.timestep,epsilon=epsilon)
-#            rrt_planner.addNodesToTree(tree,veh1.copy(),num_timesteps-j,num_nodes,max_foresight=True)
-#            j += 1
-#
-#            #node = tree.max_progress_node
-#            #best_traj_len = 0
-#            #while node != None:
-#            #    best_traj_len += 1
-#            #    a_list.append((node.state["position"],node.state["velocity"],node.state["heading"],node.state["acceleration"],node.state["yaw_rate"]))
-#            #    node = node.parent
-#
-#            #best_traj = rrt_planner.pathOfLeastCost(tree)
-#        best_traj = rrt_planner.pathOfMostProgressALT(tree,weights)
-#
-#        if len(best_traj)==1:
-#            print("\nFailed to Progress Trajectory. Ending Generation\n")
-#            break
-#        else:
-#            first_step = best_traj[1]
-#            veh1.setAction(accel=first_step["acceleration"],yaw_rate=first_step["yaw_rate"])
-#            init_state.update({"acceleration":first_step["acceleration"],"yaw_rate":first_step["yaw_rate"]})
-#            #first_step = a_list[-2] #-1 is the state the car is currently in
-#            #Actions taken to get to the first non-start state
-#            #veh1.setAction(accel=first_step[-2],yaw_rate=first_step[-1])
-#            #init_state.update({"acceleration":first_step[-2],"yaw_rate":first_step[-1]})
-#            trajectory.append(((init_state["position"],init_state["velocity"]),(init_state["acceleration"],init_state["yaw_rate"])))
-#            sim.singleStep(car_list=[veh1,obstacle],move_dict={veh1:[(first_step["acceleration"],first_step["yaw_rate"])]},index=0)
-#            #veh1.move()
-#            #veh1.sense()
-#            step_count += 1
-#            print("\n{}: Veh1 at: {} ({})\tObstacle at: {} ({})\tGoal at: {}".format(step_count*veh1.timestep,veh1.state["position"],veh1.state["velocity"],obstacle.state["position"],obstacle.state["velocity"],goal_state["position"]))
-#            print("Distance from Goal: {}\n".format(nodeDistance(defineState(veh1),goal_state,weights)))
-#            #print("{}: Veh1 at: {} ({}\tGoal at: {}\n".format(step_count*veh1.timestep,veh1.state["position"],veh1.state["velocity"],goal_state["position"]))
-#
-#            if not canGo([veh1]):
-#                print("Vehicle can't go anymore")
-#                break
-#
-#    t2 = time.time()
-#
-#    print("\n\nPrinting Trajectory")
-#    for i,entry in enumerate(trajectory):
-#        print("{}: {}".format(i*dt,entry))
-#
-#    print("\nTook {} to compute trajectory".format(t2-t1))
-#
-#    sim.reinitialise()
-#    followTrajectory(sim,[veh1],[trajectory],speed_limit)

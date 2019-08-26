@@ -55,8 +55,8 @@ class Trajectory():
             exit(-1)
         self.traj_len_t = time_len
         traj_func = {"LCL":laneChange,"LCR":laneChange,"A":velocityChange,"D":velocityChange,"NA":noAction,"ES":emergencyStop}
-        #relevant_features = {"LCL": ["position","heading","yaw_rate"],"LCR":["position","heading","yaw_rate"],"A":["velocity","acceleration","yaw_rate"],"D":["velocity","acceleration","yaw_rate"],"NA":["velocity","acceleration","yaw_rate"],"ES":["velocity","acceleration","yaw_rate"]}
-        relevant_features = {"LCL": None,"LCR": None,"A": None,"D": None,"NA": None,"ES":None}
+        relevant_features = {"LCL": ["position","heading","velocity"],"LCR":["position","heading","velocity"],"A":["position","heading","velocity"],"D":["position","heading","velocity"],"NA":["position","heading","velocity"],"ES":["position","heading","velocity"]}
+        #relevant_features = {"LCL": None,"LCR": None,"A": None,"D": None,"NA": None,"ES":None}
         self.relevant_features = relevant_features[traj_type]
         self.line_x,self.line_y,self.traj_len_t = traj_func[traj_type](init_state,dest_state,time_len,accel_range=accel_range,jerk=jerk)
         self.computeDerivatives()

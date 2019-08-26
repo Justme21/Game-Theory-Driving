@@ -347,14 +347,15 @@ def decelerateRewardFunction(init_veh,final_veh):
 
 if __name__ == "__main__":
     print("START HERE {}".format(datetime.datetime.now()))
+    start_time = datetime.datetime.now()
     debug = False
     graphics = True
     lane_width = 8
     speed_limit = 13.9
-    dt = .2
+    dt = .1
 
     #jerk = 1.1 #True value
-    jerk = 5
+    jerk = 2
     accel_range = [-9,3.5]
     yaw_rate_range = [-10,10]
 
@@ -374,7 +375,7 @@ if __name__ == "__main__":
     veh2.initialisation_params["heading"] = veh2.heading
     veh2.sense()
 
-    sim.drawSimulation()
+    #sim.drawSimulation()
 
     #const_vel_controller = lcc.DrivingController("constant",speed_limit=speed_limit)
     veh1_traj_list = list(traj_types)
@@ -385,9 +386,9 @@ if __name__ == "__main__":
     #veh2_traj_list = [traj_classes.makeTrajectory(x,veh2.state) for x in traj_types]
     #veh1_controller = gtcc.GameTheoryDrivingController(veh1,veh1_traj_list,traj_classes,other=veh2,other_traj_list=veh2_traj_list)
     #veh1_controller = gtcc.GameTheoryDrivingController(veh1,veh1_traj_list,traj_classes,goal_function=changeLaneRightRewardFunction,other=veh2,other_traj_list=veh2_traj_list,write=False)
-    veh1_traj_controller = TrajectoryDrivingController(veh1,traj_classes,"LCR",veh1.timestep,write=True)
+    veh1_traj_controller = TrajectoryDrivingController(veh1,traj_classes,"A",veh1.timestep,write=False)
     veh2_controller = gtcc.GameTheoryDrivingController(veh2,veh2_traj_list,traj_classes,goal_function=changeLaneLeftRewardFunction,other=veh1,other_traj_list=veh1_traj_list,write=False)
-    #veh2_traj_controller = TrajectoryDrivingController(veh2,traj_classes,"LCL",veh2.timestep,write=True)
+    #veh2_traj_controller = TrajectoryDrivingController(veh2,traj_classes,"A",veh2.timestep,write=False)
 
     veh1.addControllers({"game_theory":veh1_traj_controller})
     veh2.addControllers({"game_theory":veh2_controller})
@@ -402,6 +403,8 @@ if __name__ == "__main__":
     if veh2_controller.write:
         veh2_controller.closeFiles()
     print("Files are closed")
+    print("Computation took: {} seconds".format((datetime.datetime.now()-start_time).seconds))
+    print("Simulation time is: {}".format(sim.time))
 
     SAFE_DISTANCE = veh1.length
     MIN_FRONT_BACK_DISTANCE = veh1.length/2 + 1

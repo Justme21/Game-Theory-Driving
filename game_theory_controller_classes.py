@@ -58,6 +58,7 @@ class GameTheoryDrivingController():
             self.ego_state = {} #gets updated in end step so neither agent has more information than the other
             self.ego_traj_list = ego_traj_list
             self.ego_preference = [1/len(ego_traj_list) for _ in ego_traj_list]
+            self.ego_preference_order = [0 for _ in range(len(self.ego_preference))]
             self.initialisation_params.update({'ego': ego, 'ego_traj_list': ego_traj_list})
         if other is not None:
             self.other = other
@@ -65,7 +66,11 @@ class GameTheoryDrivingController():
             self.other_traj_list = other_traj_list
             self.built_other_traj_list = [self.traj_builder.makeTrajectory(x,self.other.state) for x in self.other_traj_list]
             self.other_preference = [1/len(other_traj_list) for _ in other_traj_list]
+            self.other_preference_order = [0 for _ in range(len(self.other_preference))]
             self.initialisation_params.update({'other': other, 'other_traj_list': other_traj_list})
+
+            self.policy_pairs = {}
+            self.plausible_other_trajectory_indices = []
 
 
     def selectAction(self,*args):
@@ -75,12 +80,16 @@ class GameTheoryDrivingController():
         #print("\nEgo State: {}".format(self.ego.state))
         #print("Non-Ego State: {}\n".format(self.other.state))
 
+        is_cost_matrix_changed = False # we use this as another check if the equilibrium needs to be rechecked
+
         if self.other_time_distr is None:
             max_timesteps = int(max([x.traj_len_t/self.other.timestep for x in self.built_other_traj_list]))
             #self.other_time_distr = [1/max_timesteps for _ in range(max_timesteps+1)]
             self.other_time_distr = [.99] + [.01/(max_timesteps-1) for _ in range(max_timesteps)]
             self.other_time_distr = [x/sum(self.other_time_distr) for x in self.other_time_distr]
 
+        t0 = datetime.datetime.now()
+        t_cur = t0
         if self.ego_traj is None:
             #print("Ego is resetting trajectories")
             self.built_ego_traj_list = [self.traj_builder.makeTrajectory(x,self.ego.state) for x in self.ego_traj_list]
@@ -89,7 +98,11 @@ class GameTheoryDrivingController():
             # the road and don't want to crash
             # This reward matrix does not include individual preferences of either agents
             self.E_global_cost,self.NE_global_cost = computeGlobalCostMatrix(self.t,self.ego,self.built_ego_traj_list,self.other,self.built_other_traj_list,self.other_time_distr)
+            is_cost_matrix_changed = True
 
+        t1 = datetime.datetime.now()
+        print("Making Ego Trajectories and Computing Cost Matrix takes: {}".format((t1-t_cur).microseconds))
+        t_cur = t1
         if self.t != 0:
             self.other_time_distr = updateTimeDistr(self.other,self.other_state,self.built_other_traj_list,self.other_preference,self.other_time_distr,self.other.timestep)
             #print("Self time is: {}\tUpdated other time distribution is: {}".format(self.t,self.other_time_distr))
@@ -100,80 +113,114 @@ class GameTheoryDrivingController():
                 #print(f"Rebuilding Trajectories for {self.other.label}")
                 self.built_other_traj_list = [self.traj_builder.makeTrajectory(x,self.other.state) for x in self.other_traj_list]
                 self.E_global_cost,self.NE_global_cost = computeGlobalCostMatrix(self.t,self.ego,self.built_ego_traj_list,self.other,self.built_other_traj_list,self.other_time_distr)
+                is_cost_matrix_changed = True
             self.ego_preference = updatePreference(self.t,self.ego,self.ego_state,self.built_ego_traj_list,self.ego_preference)
             self.other_preference = updatePreference(likely_other_t,self.other,self.other_state,self.built_other_traj_list,self.other_preference)
+            print("Updating other preferences takes: {}".format((datetime.datetime.now()-t_cur).microseconds))
+            t_cur = datetime.datetime.now()
 
 
-        #First step we will estimate the cost matrix that NE estimates in order to determine what they
-        #  are motivated to do.
-        E_cost_estimate = list(self.E_global_cost)
-        NE_cost_estimate = list(self.NE_global_cost)
+        ego_preference_order = [self.ego_preference.index(x) for x in sorted(self.ego_preference)]
+        other_preference_order = [self.other_preference.index(x) for x in sorted(self.other_preference)]
 
-        for i,row in enumerate(E_cost_estimate):
-            new_row = []
-            for j,entry in enumerate(row):
-                if entry != -1: entry = self.ego_preference[i]
-                #if entry != -1: entry = self.other_preference[j] #ego totally compliant to non-ego
-                new_row.append(entry)
-            E_cost_estimate[i] = list(new_row)
+        #The nash equilibrium is used to identify what the other person is likely to do. If they don't believe either agent's preferences have changed then the
+        # equilibrium will be the same.
+        if is_cost_matrix_changed or ego_preference_order != self.ego_preference_order or other_preference_order != self.other_preference_order:
+            #First step we will estimate the cost matrix that NE estimates in order to determine what they
+            #  are motivated to do.
 
-        for i,row in enumerate(NE_cost_estimate):
-            new_row = []
-            for entry in row:
-                if entry != -1: entry = self.other_preference[i]
-                new_row.append(entry)
-            NE_cost_estimate[i] = list(new_row)
+            self.ego_preference_order = list(ego_preference_order)
+            self.other_preference_order = list(other_preference_order)
 
-        #These policies give us the optimal policies for E to follow under the assumption that
-        # NE is rational and the assumption that the preferences have been correctly estimated
-        E_policies,NE_policies = computeNashEquilibria(E_cost_estimate,NE_cost_estimate)
+            E_cost_estimate = list(self.E_global_cost)
+            NE_cost_estimate = list(self.NE_global_cost)
 
-        #print(f"\n\nSelecting Action for {self.ego.label}")
-        #print(f"\nPreferences are: \t\t{self.ego_traj_list}\nEgo: \t{self.ego_preference}\nNon-Ego: \t{self.other_preference}\n")
-        #print("E Cost Estimate:")
-        #for row in E_cost_estimate:
-        #    print(row)
+            for i,row in enumerate(E_cost_estimate):
+                new_row = []
+                for j,entry in enumerate(row):
+                    if entry != -1: entry = self.ego_preference[i]
+                    #if entry != -1: entry = self.other_preference[j] #ego totally compliant to non-ego
+                    new_row.append(entry)
+                E_cost_estimate[i] = list(new_row)
 
-        #print("\nNE Cost Estimate")
-        #for row in NE_cost_estimate:
-        #    print(row)
-        #print("\n")
+            for i,row in enumerate(NE_cost_estimate):
+                new_row = []
+                for entry in row:
+                    if entry != -1: entry = self.other_preference[i]
+                    new_row.append(entry)
+                NE_cost_estimate[i] = list(new_row)
 
-        #print("NE believes optimal policies are")
-        #for i,(E_pol,NE_pol) in enumerate(zip(E_policies,NE_policies)):
-        #    print(f"{i}: {E_pol}\t{NE_pol}")
+            t2 = datetime.datetime.now()
+            print("Updating Cost Matrices takes: {}".format((t2-t_cur).microseconds))
+
+            #These policies give us the optimal policies for E to follow under the assumption that
+            # NE is rational and the assumption that the preferences have been correctly estimated
+            E_policies,NE_policies = computeNashEquilibria(E_cost_estimate,NE_cost_estimate)
+            t3 = datetime.datetime.now()
+            print("Computing Nash Equilibrium takes: {}".format((t3-t2).microseconds))
+            t_cur = t3
+
+            #print(f"\n\nSelecting Action for {self.ego.label}")
+            #print(f"\nPreferences are: \t\t{self.ego_traj_list}\nEgo: \t{self.ego_preference}\nNon-Ego: \t{self.other_preference}\n")
+            #print("E Cost Estimate:")
+            #for row in E_cost_estimate:
+            #    print(row)
+
+            #print("\nNE Cost Estimate")
+            #for row in NE_cost_estimate:
+            #    print(row)
+            #print("\n")
+
+            #print("NE believes optimal policies are")
+            #for i,(E_pol,NE_pol) in enumerate(zip(E_policies,NE_policies)):
+            #    print(f"{i}: {E_pol}\t{NE_pol}")
 
 
-        #BASED ON THE POLICIES THAT MAXIMISE NE'S EXPECTED PAYOFF E MUST NOW DETERMINE THEIR
-        # BEST ACTION BASED ON THEIR KNOWN, TRUE REWARD FUNCTION
+            #BASED ON THE POLICIES THAT MAXIMISE NE'S EXPECTED PAYOFF E MUST NOW DETERMINE THEIR
+            # BEST ACTION BASED ON THEIR KNOWN, TRUE REWARD FUNCTION
 
-        #SOMEHOW INCORPORATE COMPLIANCE INTO EXPECTED VALUE COMPUTATION BY RELIEVING THE ASSUMPTION
-        # OF RATIONALITY ON NE. I.E. WE NO LONGER ASSUME THEY CAN ANTICIPATE THAT A CRASH WILL OCCUR
-        # PAYOFF IS AMPLIFIED BY COMPLIANCE FOR THE MAXIMAL ESTIMATED PREFERENCE
-        # E MUST THEN DETERMINE THEIR OPTIMAL BEHAVIOUR
-        # SOMEHOW THIS IS THEN USED TO DETERMINE WHAT E'S ACTION SHOULD BE
+            #SOMEHOW INCORPORATE COMPLIANCE INTO EXPECTED VALUE COMPUTATION BY RELIEVING THE ASSUMPTION
+            # OF RATIONALITY ON NE. I.E. WE NO LONGER ASSUME THEY CAN ANTICIPATE THAT A CRASH WILL OCCUR
+            # PAYOFF IS AMPLIFIED BY COMPLIANCE FOR THE MAXIMAL ESTIMATED PREFERENCE
+            # E MUST THEN DETERMINE THEIR OPTIMAL BEHAVIOUR
+            # SOMEHOW THIS IS THEN USED TO DETERMINE WHAT E'S ACTION SHOULD BE
 
-        #IF THE EXPECTED PAYOFF TO NE OF BEHAVING IRRATIONALLY IS HIGHER THAN BEHAVING RATIONALLY,
-        # BEHAVE IN COMPLIANCE WITH THE OTHER
+            #IF THE EXPECTED PAYOFF TO NE OF BEHAVING IRRATIONALLY IS HIGHER THAN BEHAVING RATIONALLY,
+            # BEHAVE IN COMPLIANCE WITH THE OTHER
 
-        #COMPLIANCE SHOULD BE AN ESTIMATE FOR HOW LIKELY NE IS TO BEHAVE AS WE WANT THEM TO
-        #THUS WE SHOULD BE ABLE TO SPECIFY A DESIRED TARGET FOR NE, AND THEN BY CHOOSING ACTIONS
-        # CONSTRUCT A GAME IN WHICH THEY ARE INCENTIVISED TO GO TO WHERE WE WANT TO, BY MANIPULATING
-        # WHAT THEY WOULD WANT TO DO BASED ON THE COMPLIANCE VALUE
+            #COMPLIANCE SHOULD BE AN ESTIMATE FOR HOW LIKELY NE IS TO BEHAVE AS WE WANT THEM TO
+            #THUS WE SHOULD BE ABLE TO SPECIFY A DESIRED TARGET FOR NE, AND THEN BY CHOOSING ACTIONS
+            # CONSTRUCT A GAME IN WHICH THEY ARE INCENTIVISED TO GO TO WHERE WE WANT TO, BY MANIPULATING
+            # WHAT THEY WOULD WANT TO DO BASED ON THE COMPLIANCE VALUE
 
-        max_ep = None
-        NE_best_policies = []
-        for a,(E_p,NE_p) in enumerate(zip(E_policies,NE_policies)):
-            ep = 0
-            for j in range(len(E_p)):
-                for i in range(len(NE_p)):
-                    ep += E_p[j]*NE_p[i]*NE_cost_estimate[i][j]
-            if max_ep is None or ep>=max_ep:
-                if max_ep is None or ep>max_ep:
-                    max_ep = ep
-                    NE_best_policies = []
-                if a not in NE_best_policies:
-                    NE_best_policies.append(a)
+            max_ep = None
+            NE_best_policies = []
+            for a,(E_p,NE_p) in enumerate(zip(E_policies,NE_policies)):
+                ep = 0
+                for j in range(len(E_p)):
+                    for i in range(len(NE_p)):
+                        ep += E_p[j]*NE_p[i]*NE_cost_estimate[i][j]
+                if max_ep is None or ep>=max_ep:
+                    if max_ep is None or ep>max_ep:
+                        max_ep = ep
+                        NE_best_policies = []
+                    if a not in NE_best_policies:
+                        NE_best_policies.append(a)
+
+            self.policy_pairs = {}
+            self.plausible_other_trajectory_indices = []
+            unseen_indices = [i for i in range(len(self.built_other_traj_list))]
+            for i in NE_best_policies:
+                if tuple(NE_policies[i]) not in self.policy_pairs:
+                    self.policy_pairs[tuple(NE_policies[i])] = list(E_policies[i])
+                    #Keep track of the trajectory choices of other that the equilibrium policies deem plausible
+                    if unseen_indices!=[]:
+                        for j,val in enumerate(NE_policies[i]):
+                            if val>0 and j in unseen_indices:
+                                self.plausible_other_trajectory_indices.append(j)
+                                unseen_indices.remove(j)
+                else:
+                    self.policy_pairs[tuple(NE_policies[i])] = [x+y for x,y in zip(self.policy_pairs[tuple(NE_policies[i])],E_policies[i])]
 
         #INSTEAD THE BEST POLICIES ARE WHAT THE NE_AGENT MIGHT DO, WE MUST COMPUTE THE BEST RESPONSE TO EACH ONE
         # GIVEN THE TRUE E REWARD FUNCTION, AND THEN THAT IS E'S BEHAVIOUR
@@ -201,44 +248,60 @@ class GameTheoryDrivingController():
 
         #print("\nEgo trajectory choices are: {}".format([x.label for x in ego_traj_choices]))
 
+        t4 = datetime.datetime.now()
+        print("Time to determine E's trajectory choices is: {}".format((t4-t_cur).microseconds))
+        t_cur = t4
+
         #Here we can calculate the Ego agent's true reward matrix based on the known trajectories available
         # to them and their known reward function
         #print("\n")
         E_cost_second_estimate = []
+
+        other_time_distr = list(self.other_time_distr)
+        #dummy_trajectories = [self.traj_builder.makeTrajectory(x,dummy_ego.state) for x in self.ego_traj_list]
+        #Want to prevent the controller cancelling and then reinitialising the same trajectory for extra points
+        #So we generate all possible next steps, then omit the one the agent is currently on (see "orig_index = ...")
+        dummy = self.ego.copy()
         for ego_traj in ego_traj_choices:
             new_row = []
-            for other_traj in self.built_other_traj_list:
-                #val,_ = computeReward(self.t,self.ego.copy(),ego_traj,self.other.copy(),other_traj,self.other_time_distr,veh1_reward_function=self.goal_function)
-                val_e,val_other = computeReward(self.t,self.ego.copy(),ego_traj,self.other.copy(),other_traj,self.other_time_distr,veh1_reward_function=self.goal_function)
-                #print("Reward to ego for performing {} when NE performs {} is {}".format(ego_traj.label,other_traj.label,val))
-                if val_e != -1:
-                    if ego_traj_choices != self.built_ego_traj_list:
-                        dummy_ego = self.ego.copy()
-                        dummy_t = ego_traj.traj_len_t-self.t
-                        dummy_other = self.other.copy()
-                        dummy_time_distr = list(self.other_time_distr)
-                        #shift time forward by the appropriate amount
-                        dummy_time_distr = dummy_time_distr[-1-int(dummy_t/self.ego.timestep):] + dummy_time_distr[:-1-int(dummy_t/self.ego.timestep)]
-                        orig_label = re.findall("([a-zA-Z]+)",ego_traj.label)[0]
-                        #dummy_trajectories = [self.traj_builder.makeTrajectory(x,dummy_ego.state) for x in self.ego_traj_list]
-                        #Want to prevent the controller cancelling and then reinitialising the same trajectory for extra points
-                        dummy_trajectories = [self.traj_builder.makeTrajectory(x,dummy_ego.state) for x in self.ego_traj_list if x!=orig_label]
-                        #max_possible_reward = max([computeReward(0,dummy_ego.copy(),x,dummy_other.copy(),other_traj,dummy_time_distr,veh1_reward_function=self.goal_function)[0] for x in dummy_trajectories])
-                        possible_rewards = [computeReward(0,dummy_ego.copy(),x,dummy_other.copy(),other_traj,dummy_time_distr,veh1_reward_function=self.goal_function)[0] for x in dummy_trajectories]
-                        #print("Possible Rewards for {} are: {}".format(self.ego.label,possible_rewards))
-                        max_possible_reward = max(possible_rewards)
-                        val_e += (.9**(ego_traj.traj_len_t-self.t))*max_possible_reward
-                    #print("Reward to E ({}) for performing {} when NE ({}) performs {} is {}".format(self.ego.label,ego_traj.label,self.other.label,other_traj.label,val_e))
-                    #new_row.append(val_other)
-                    new_row.append(val_e)
+            #Omit the trajectroy the agent is currently on from consideration
+            orig_label = re.findall("([a-zA-Z]+)",ego_traj.label)[0]
+            orig_index = self.ego_traj_list.index(orig_label)
+            putCarOnTraj(dummy,ego_traj,ego_traj.traj_len_t)
+            possible_trajectories = [self.traj_builder.makeTrajectory(x,dummy.state) for i,x in enumerate(self.ego_traj_list) if i!=orig_index]
+            dummy_t = ego_traj.traj_len_t-self.t
+
+            for i,other_traj in enumerate(self.built_other_traj_list):
+                #we believe that the rational agent has no reason to perform these trajectories
+                # no point wasting time computing the reward for them
+                if i not in self.plausible_other_trajectory_indices: new_row.append(0)
                 else:
-                    #print("E: {} NE: {} results in death for {}".format(ego_traj.label,other_traj.label,self.ego.label))
-                    new_row.append(-1)
-                    #print("Reward to ego for performing {} when NE performs {} is {}".format(ego_traj.label,other_traj.label,-1))
-                #new_row.append(val)
+                    #val,_ = computeReward(self.t,self.ego.copy(),ego_traj,self.other.copy(),other_traj,self.other_time_distr,veh1_reward_function=self.goal_function)
+                    val_e,val_other = computeReward(self.t,self.ego.copy(),ego_traj,self.other.copy(),other_traj,self.other_time_distr,veh1_reward_function=self.goal_function)
+                    #print("Reward to ego for performing {} when NE performs {} is {}".format(ego_traj.label,other_traj.label,val))
+                    if val_e != -1:
+                    #    if ego_traj_choices != self.built_ego_traj_list:
+                    #        #shift time forward by the appropriate amount
+                    #        dummy_time_distr = other_time_distr[-1-int(dummy_t/self.ego.timestep):] + other_time_distr[:-1-int(dummy_t/self.ego.timestep)]
+                    #        #max_possible_reward = max([computeReward(0,dummy_ego.copy(),x,dummy_other.copy(),other_traj,dummy_time_distr,veh1_reward_function=self.goal_function)[0] for x in dummy_trajectories])
+                    #        possible_rewards = [computeReward(0,self.ego.copy(),x,self.other.copy(),other_traj,dummy_time_distr,veh1_reward_function=self.goal_function)[0] for x in dummy_trajectories]
+                    #        #print("Possible Rewards for {} are: {}".format(self.ego.label,possible_rewards))
+                    #        max_possible_reward = max(possible_rewards)
+                    #        val_e += (.9**(ego_traj.traj_len_t-self.t))*max_possible_reward
+                    #    #print("Reward to E ({}) for performing {} when NE ({}) performs {} is {}".format(self.ego.label,ego_traj.label,self.other.label,other_traj.label,val_e))
+                    #    #new_row.append(val_other)
+                        new_row.append(val_e)
+                    else:
+                        #print("E: {} NE: {} results in death for {}".format(ego_traj.label,other_traj.label,self.ego.label))
+                        new_row.append(-1)
+                        #print("Reward to ego for performing {} when NE performs {} is {}".format(ego_traj.label,other_traj.label,-1))
+                    #new_row.append(val)
 
             E_cost_second_estimate.append(list(new_row))
 
+        t5 = datetime.datetime.now()
+        print("Time to determine reward for E's trajectories: {}".format((t5-t_cur).microseconds))
+        t_cur = t5
         #print("\n\nE's true estimate of the cost")
         #for row in E_cost_second_estimate:
         #    print(row)
@@ -260,15 +323,22 @@ class GameTheoryDrivingController():
         #We compute the expected payoff for each possible trajectory of E against each possible optimal
         # policy for NE
         expected_payoffs = []
-        for index in NE_best_policies:
+        for policy in self.policy_pairs:
             payoff = []
-            NE_p = NE_policies[index]
+            #Policy pairs identifies the different strategies/policies the other agent might use, and if they use it which policy/strategy they expect the ego agent to use
+            other_does = policy #policy is  an ordered list of probabilities indicating the probability other will use each trajectory
+            ego_does = self.policy_pairs[policy] # in practise policies are binary.
+            #other follows the current policy only if they think the ego agent is going to follow the ego_does policy. Thus the probability the other agent is follow
+            # the current policy is the sum of the probabilties of the trajectories that will trigger it. This should be normalised, but for the sake of computing expected
+            # value it is fine.
+            prob_other_policy = sum([self.ego_preference[i]*ego_does[i] for i in range(len(ego_does))])
             for j in range(len(ego_traj_choices)):
                 ep = 0
-                for i in range(len(NE_p)):
+                for i in range(len(other_does)):
                     #ep += NE_p[i]*E_cost_second_estimate[j][i]
-                    ep += self.other_preference[i]*NE_p[i]*E_cost_second_estimate[j][i]
-                payoff += [ep]
+                    #ep += self.other_preference[i]*NE_p[i]*E_cost_second_estimate[j][i]
+                    ep += other_does[i]*self.other_preference[i]*E_cost_second_estimate[j][i]
+                payoff += [prob_other_policy*ep]
             expected_payoffs.append(list(payoff))
 
         #print("\nE's expected payoff for each strategy")
@@ -302,6 +372,9 @@ class GameTheoryDrivingController():
             #print("\nPrinting Proposed New Trajectory: {}".format(self.ego_traj.label))
             #printTrajectory(self.ego,self.ego_traj,self.ego.timestep)
 
+        t6 = datetime.datetime.now()
+        print("Time to select action: {}".format((t6-t_cur).microseconds))
+        t_cur = t6
 
         action = self.ego_traj.action(self.t,self.ego.Lf+self.ego.Lr)
         self.t += self.ego.timestep
@@ -312,6 +385,8 @@ class GameTheoryDrivingController():
             self.ego_traj = None
             self.t = 0
 
+        print("Total time to compute actions is: {}".format((t6-t0).microseconds))
+        print("\n\n")
         return action[0],action[1]
 
 
@@ -569,12 +644,20 @@ def computeNashEquilibria(E_cost_matrix,NE_cost_matrix):
     E_cost_matrix = np.array(E_cost_matrix)
     NE_cost_matrix = np.array(NE_cost_matrix)
     game = nash.Game(E_cost_matrix,NE_cost_matrix)
-    equilibria = game.support_enumeration()
+    #equilibria = game.lemke_howson_enumeration()
+    equilibria = game.support_enumeration(non_degenerate=False,tol=0)
 
     E_policies,NE_policies = [],[]
     for eq in equilibria:
-        E_policies.append(eq[0])
-        NE_policies.append(eq[1])
+        if not np.isnan(eq[0][0]):
+            print("Eq is: {}".format(eq))
+            E_policies.append(eq[0])
+            NE_policies.append(eq[1])
+
+    print("\nPrinting Equilibria policies")
+    for i,(E,NE) in enumerate(zip(E_policies,NE_policies)):
+        print("{}: {}\t{}".format(i,E,NE))
+    print("End printing equilibria policies\n\n")
 
     return E_policies,NE_policies
 

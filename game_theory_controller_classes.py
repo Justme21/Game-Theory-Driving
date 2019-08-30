@@ -12,6 +12,7 @@ sys.path.insert(0,'../driving_simulator')
 import road_classes
 
 import datetime #only need for writing file for preferences to prevent overwriting or doubling up
+import main
 
 PREFERENCE_FILENAME = "Game_Theory_Controller_Preferences"
 ROLLOUT_FILENAME = "Game_Theory_Controller_Rollout"
@@ -48,7 +49,8 @@ class GameTheoryDrivingController():
         self.write = write
 
         if write and "DUMMY" not in ego.label:
-            self.preference_file = initialiseFile(PREFERENCE_FILENAME,self.ego.label,self.ego.timestep,other_traj_list)
+            self.ego_preference_file = initialiseFile(PREFERENCE_FILENAME+"_{}".format(self.ego.label),self.ego.label,self.ego.timestep,other_traj_list)
+            self.other_preference_file = initialiseFile(PREFERENCE_FILENAME+"_{}".format(self.other.label),self.ego.label,self.ego.timestep,other_traj_list)
             self.rollout_file = initialiseFile(ROLLOUT_FILENAME,self.ego.label,self.ego.timestep,other_traj_list)
 
 
@@ -74,6 +76,12 @@ class GameTheoryDrivingController():
 
 
     def selectAction(self,*args):
+        print(f"\n Selecting Action for: {self.ego.label}")
+        if self.ego_traj is not None:
+            if abs(self.ego_traj.velocity(self.t)-self.ego_state["velocity"])>1:
+                print("Velocity Error:\nEgo: {}\nShould be: {} per {}".format(self.ego_state,self.ego_traj.state(self.t,self.ego.Lr+self.ego.Lf),self.ego_traj.label))
+                exit(-1)
+
         #We maintain an estimate of both agents preferences in order to approximate a perspective
         #common to both agents
 
@@ -119,6 +127,8 @@ class GameTheoryDrivingController():
             print("Updating other preferences takes: {}".format((datetime.datetime.now()-t_cur).microseconds))
             t_cur = datetime.datetime.now()
 
+        print(f"\nPreferences are: \t\t{self.ego_traj_list}\nEgo: \t{self.ego_preference}\nNon-Ego: \t{self.other_preference}\n")
+
 
         ego_preference_order = [self.ego_preference.index(x) for x in sorted(self.ego_preference)]
         other_preference_order = [self.other_preference.index(x) for x in sorted(self.other_preference)]
@@ -138,6 +148,8 @@ class GameTheoryDrivingController():
             for i,row in enumerate(E_cost_estimate):
                 new_row = []
                 for j,entry in enumerate(row):
+                    #if entry != -1: entry,_ = computeReward(self.t,self.ego.copy(),self.built_ego_traj_list[i],self.other.copy(),self.built_other_traj_list[j],self.other_time_distr,\
+                    #        veh1_reward_function=self.goal_function,veh2_reward_function=main.changeLaneRightRewardFunction)
                     if entry != -1: entry = self.ego_preference[i]
                     #if entry != -1: entry = self.other_preference[j] #ego totally compliant to non-ego
                     new_row.append(entry)
@@ -145,13 +157,25 @@ class GameTheoryDrivingController():
 
             for i,row in enumerate(NE_cost_estimate):
                 new_row = []
-                for entry in row:
+                for j,entry in enumerate(row):
                     if entry != -1: entry = self.other_preference[i]
+                    #if entry != -1: _, entry = computeReward(self.t,self.ego.copy(),self.built_ego_traj_list[j],self.other.copy(),self.built_other_traj_list[i],self.other_time_distr,\
+                    #        veh1_reward_function=self.goal_function,veh2_reward_function=main.changeLaneRightRewardFunction)
                     new_row.append(entry)
                 NE_cost_estimate[i] = list(new_row)
 
             t2 = datetime.datetime.now()
             print("Updating Cost Matrices takes: {}".format((t2-t_cur).microseconds))
+
+            print("\nPrinting E's estimated cost matrix")
+            for row in E_cost_estimate:
+                print(row)
+            print("Ending print of E's estimated cost matrix\n")
+
+            print("\nPrinting NE's estimated cost matrix")
+            for row in NE_cost_estimate:
+                print(row)
+            print("Ending print of NE's estimated cost matrix\n")
 
             #These policies give us the optimal policies for E to follow under the assumption that
             # NE is rational and the assumption that the preferences have been correctly estimated
@@ -161,7 +185,6 @@ class GameTheoryDrivingController():
             t_cur = t3
 
             #print(f"\n\nSelecting Action for {self.ego.label}")
-            #print(f"\nPreferences are: \t\t{self.ego_traj_list}\nEgo: \t{self.ego_preference}\nNon-Ego: \t{self.other_preference}\n")
             #print("E Cost Estimate:")
             #for row in E_cost_estimate:
             #    print(row)
@@ -222,6 +245,8 @@ class GameTheoryDrivingController():
                 else:
                     self.policy_pairs[tuple(NE_policies[i])] = [x+y for x,y in zip(self.policy_pairs[tuple(NE_policies[i])],E_policies[i])]
 
+        print("Plausible Trajectory indices for other are: {}".format(self.plausible_other_trajectory_indices))
+
         #INSTEAD THE BEST POLICIES ARE WHAT THE NE_AGENT MIGHT DO, WE MUST COMPUTE THE BEST RESPONSE TO EACH ONE
         # GIVEN THE TRUE E REWARD FUNCTION, AND THEN THAT IS E'S BEHAVIOUR
         if self.ego_traj is  None:
@@ -234,7 +259,8 @@ class GameTheoryDrivingController():
             if "Stopped" not in self.ego_traj.label and "Reversed" not in self.ego_traj.label:
                 #ego_traj_choices.append(ReversedTrajectory(self.ego_traj,self.t-(1.5*self.ego.timestep)))
                 #I think this will work. But only techincally
-                reversed_traj = self.traj_builder.makeTrajectory(self.ego_traj.label,self.ego_traj.state(self.t,self.ego.Lr+self.ego.Lf),dest_state=self.ego_traj.state(0,self.ego.Lr+self.ego.Lf),time_len=self.t)
+                #reversed_traj = self.traj_builder.makeTrajectory(self.ego_traj.label,self.ego_traj.state(self.t,self.ego.Lr+self.ego.Lf),dest_state=self.ego_traj.state(0,self.ego.Lr+self.ego.Lf),time_len=self.t)
+                reversed_traj = self.traj_builder.makeTrajectory(self.ego_traj.label,self.ego.state,dest_state=self.ego_traj.state(0,self.ego.Lr+self.ego.Lf),time_len=self.t)
                 reversed_traj.label+="-Reversed-{}".format(self.t)
                 ego_traj_choices.append(reversed_traj)
 
@@ -269,7 +295,7 @@ class GameTheoryDrivingController():
             orig_index = self.ego_traj_list.index(orig_label)
             putCarOnTraj(dummy,ego_traj,ego_traj.traj_len_t)
             possible_trajectories = [self.traj_builder.makeTrajectory(x,dummy.state) for i,x in enumerate(self.ego_traj_list) if i!=orig_index]
-            dummy_t = ego_traj.traj_len_t-self.t
+            other_t_offset = ego_traj.traj_len_t-self.t
 
             for i,other_traj in enumerate(self.built_other_traj_list):
                 #we believe that the rational agent has no reason to perform these trajectories
@@ -278,18 +304,19 @@ class GameTheoryDrivingController():
                 else:
                     #val,_ = computeReward(self.t,self.ego.copy(),ego_traj,self.other.copy(),other_traj,self.other_time_distr,veh1_reward_function=self.goal_function)
                     val_e,val_other = computeReward(self.t,self.ego.copy(),ego_traj,self.other.copy(),other_traj,self.other_time_distr,veh1_reward_function=self.goal_function)
-                    #print("Reward to ego for performing {} when NE performs {} is {}".format(ego_traj.label,other_traj.label,val))
+                    #print("Reward to {} for performing {} when {} performs {} is {}".format(self.ego.label,ego_traj.label,self.other.label,other_traj.label,val_e))
                     if val_e != -1:
-                    #    if ego_traj_choices != self.built_ego_traj_list:
-                    #        #shift time forward by the appropriate amount
-                    #        dummy_time_distr = other_time_distr[-1-int(dummy_t/self.ego.timestep):] + other_time_distr[:-1-int(dummy_t/self.ego.timestep)]
-                    #        #max_possible_reward = max([computeReward(0,dummy_ego.copy(),x,dummy_other.copy(),other_traj,dummy_time_distr,veh1_reward_function=self.goal_function)[0] for x in dummy_trajectories])
-                    #        possible_rewards = [computeReward(0,self.ego.copy(),x,self.other.copy(),other_traj,dummy_time_distr,veh1_reward_function=self.goal_function)[0] for x in dummy_trajectories]
-                    #        #print("Possible Rewards for {} are: {}".format(self.ego.label,possible_rewards))
-                    #        max_possible_reward = max(possible_rewards)
-                    #        val_e += (.9**(ego_traj.traj_len_t-self.t))*max_possible_reward
-                    #    #print("Reward to E ({}) for performing {} when NE ({}) performs {} is {}".format(self.ego.label,ego_traj.label,self.other.label,other_traj.label,val_e))
-                    #    #new_row.append(val_other)
+                        if ego_traj_choices != self.built_ego_traj_list:
+                            #shift time forward by the appropriate amount
+                            dummy_time_distr = other_time_distr[-1-int(other_t_offset/self.ego.timestep):] + other_time_distr[:-1-int(other_t_offset/self.ego.timestep)]
+                            #max_possible_reward = max([computeReward(0,dummy_ego.copy(),x,dummy_other.copy(),other_traj,dummy_time_distr,veh1_reward_function=self.goal_function)[0] for x in dummy_trajectories])
+                            possible_rewards = [computeReward(0,self.ego.copy(),x,self.other.copy(),other_traj,dummy_time_distr,veh1_reward_function=self.goal_function)[0] for x in possible_trajectories]
+                            print("Possible Rewards for {} are: {}".format(ego_traj.label,possible_rewards))
+                            max_possible_reward = max(possible_rewards)
+                            #val_e += (.9**(ego_traj.traj_len_t-self.t))*max_possible_reward
+                            val_e = max(val_e,(.9**(ego_traj.traj_len_t))*max_possible_reward)
+                        #print("Reward to E ({}) for performing {} when NE ({}) performs {} is {}".format(self.ego.label,ego_traj.label,self.other.label,other_traj.label,val_e))
+                        #new_row.append(val_other)
                         new_row.append(val_e)
                     else:
                         #print("E: {} NE: {} results in death for {}".format(ego_traj.label,other_traj.label,self.ego.label))
@@ -302,9 +329,10 @@ class GameTheoryDrivingController():
         t5 = datetime.datetime.now()
         print("Time to determine reward for E's trajectories: {}".format((t5-t_cur).microseconds))
         t_cur = t5
-        #print("\n\nE's true estimate of the cost")
-        #for row in E_cost_second_estimate:
-        #    print(row)
+        print("\n\nE's true estimate of the cost")
+        for row in E_cost_second_estimate:
+            print(row)
+        print("\n")
 
 
         #expected_payoffs = []
@@ -341,9 +369,9 @@ class GameTheoryDrivingController():
                 payoff += [prob_other_policy*ep]
             expected_payoffs.append(list(payoff))
 
-        #print("\nE's expected payoff for each strategy")
-        #for entry in expected_payoffs:
-        #    print(entry)
+        print("\nE's expected payoff for each strategy")
+        for entry in expected_payoffs:
+            print(entry)
 
 
         #We identify the trajectory for E that would have the highest expected value
@@ -360,17 +388,18 @@ class GameTheoryDrivingController():
 
         chosen_traj = ego_traj_choices[max_index]
 
-        #print("\nChoosing {} with expected reward {}".format(chosen_traj.label,max_ep))
+        print("\nChoosing {} with expected reward {}".format(chosen_traj.label,max_ep))
         if chosen_traj != self.ego_traj:
-            #if self.ego_traj is not None:
-            #    print("Ego proposing to change from {} to {}".format(self.ego_traj.label,chosen_traj.label))
-            #else:
-            #    print("Ego proposing to change to {}".format(chosen_traj.label))
+            if self.ego_traj is not None:
+                print("Ego proposing to change from {} to {}".format(self.ego_traj.label,chosen_traj.label))
+            else:
+                print("Ego proposing to change to {}".format(chosen_traj.label))
+
             self.t = 0
             self.ego_traj = chosen_traj
 
-            #print("\nPrinting Proposed New Trajectory: {}".format(self.ego_traj.label))
-            #printTrajectory(self.ego,self.ego_traj,self.ego.timestep)
+            print("\nPrinting Proposed New Trajectory: {}".format(self.ego_traj.label))
+            printTrajectory(self.ego,self.ego_traj,self.ego.timestep)
 
         t6 = datetime.datetime.now()
         print("Time to select action: {}".format((t6-t_cur).microseconds))
@@ -379,8 +408,10 @@ class GameTheoryDrivingController():
         action = self.ego_traj.action(self.t,self.ego.Lf+self.ego.Lr)
         self.t += self.ego.timestep
 
+        print("Selected Action is : {}".format(action))
+
         #print("\nReturning Accel: {}\tYaw Rate: {}\n".format(action[0],action[1]))
-        if self.t>self.ego_traj.traj_len_t:
+        if self.t>self.ego_traj.traj_len_t+2*self.ego.timestep:
             #print("\n{} Reached the end of the trajectory. Resetting Trajectory\n\n\n".format(self.ego.label))
             self.ego_traj = None
             self.t = 0
@@ -408,7 +439,8 @@ class GameTheoryDrivingController():
 
 
     def closeFiles(self):
-        self.preference_file.close()
+        self.ego_preference_file.close()
+        self.other_preference_file.close()
         self.rollout_file.close()
 
 
@@ -419,7 +451,8 @@ class GameTheoryDrivingController():
         #pass
         self.updateStates()
         if self.write:
-            writeToFile(self.preference_file,self.other_preference)
+            writeToFile(self.other_preference_file,self.other_preference)
+            writeToFile(self.ego_preference_file,self.ego_preference)
             writeToFile(self.rollout_file,self.ego.state)
             writeToFile(self.rollout_file,self.other.state)
             self.rollout_file.write("\n")
@@ -571,9 +604,10 @@ def checkForLaneCrossing(veh):
     return False
 
 
-def computeReward(init_t1,veh1,traj1,veh2,traj2,veh2_time_distr,veh1_reward_function=None):
+def computeReward(init_t1,veh1,traj1,veh2,traj2,veh2_time_distr,veh1_reward_function=None,veh2_reward_function=None):
     #print("\nComputing Reward: {} performing: {}, {} Performing {}".format(veh1.label,traj1.label,veh2.label,traj2.label))
     init_veh1 = veh1.copy()
+    init_veh2 = veh2.copy()
 
     r1 = 0
     r2 = 0
@@ -624,6 +658,8 @@ def computeReward(init_t1,veh1,traj1,veh2,traj2,veh2_time_distr,veh1_reward_func
 
         if veh1_reward_function is not None and r1!=-1:
             r1 = veh1_reward_function(init_veh1,veh1)
+        if veh2_reward_function is not None and r2!=-1:
+            r2 = veh2_reward_function(init_veh2,veh2)
 
     #print("Returning: R1: {}\tR2: {}".format(r1,r2))
     return r1,r2

@@ -1,5 +1,7 @@
 import datetime
 
+ROLLOUT_FILENAME = "Traj_Controller_Rollout"
+
 class TrajectoryDrivingController():
     def __init__(self,ego,traj_builder,traj_label,timestep=.1,write=False,**kwargs):
         self.traj_builder = traj_builder
@@ -13,7 +15,7 @@ class TrajectoryDrivingController():
         self.write = write
 
         if write and "DUMMY" not in ego.label:
-            self.rollout_file = initialiseFile("Traj_Controller_{}_{}".format(ego.label,traj_label),self.ego.label,self.ego.timestep,None)
+            self.rollout_file = initialiseFile(ROLLOUT_FILENAME+"_{}_{}".format(ego.label,traj_label),ego.label,timestep,None)
 
 
     def setup(self,ego=None,traj_label=None,**kwargs):
@@ -36,7 +38,7 @@ class TrajectoryDrivingController():
         if self.trajectory is None:
             self.trajectory = self.traj_builder.makeTrajectory(self.traj_label,self.ego.state)
 
-        if self.time>=self.trajectory.traj_len_t:
+        if self.time>self.trajectory.traj_len_t:
             #print(f"TCC: {self.ego.label} has completed their trajectory")
             #exit(-1)
             action = (0,0)

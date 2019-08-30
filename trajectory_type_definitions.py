@@ -23,7 +23,7 @@ class Line():
 class TrajectoryClasses():
     def __init__(self,time_len=1,lane_width=6,accel_range=[-2,2],jerk=1):
         self.traj_len = time_len
-        self.traj_types = {"LCR":{"position":(lane_width,0)},"LCL":{"position":(-lane_width,0)},\
+        self.traj_types = {"LCL":{"position":(-lane_width,0)},"LCR":{"position":(lane_width,0)},\
                 "A": {"acceleration":1},"D":{"acceleration":-1},"NA": {},"ES":{}}
 
         self.boundary_constraints = {"accel_range":accel_range,"jerk":jerk}
@@ -150,6 +150,15 @@ class Trajectory():
             t += dt
 
         return position_list
+
+    def completeHeadingList(self,dt=.1):
+        t = 0
+        heading_list = []
+        while t<= self.traj_len_t+dt:
+            heading_list.append(self.heading(t))
+            t += dt
+
+        return heading_list
 
 
     def completeVelocityList(self,dt=.1):
@@ -373,6 +382,7 @@ def putCarOnTraj(car,traj,time):
         else: heading = 90
 
     car.setMotionParams(posit,heading,velocity)
+    car.sense()
 
 
 def evaluate(t,coefs):

@@ -20,10 +20,10 @@ ROLLOUT_FILENAME = "Game_Theory_Controller_Rollout"
 
 class GameTheoryDrivingController():
 
-    def __init__(self,ego,ego_traj_list,traj_builder,goal_function=None,other=None,other_traj_list=None,write=False,**kwargs):
+    def __init__(self,ego,ego_traj_list,traj_builder,goal_function=None,reactive_car=None,non_reactive_car=None,non_ego_traj_list=None,write=False,**kwargs):
 
         self.initialisation_params = {'ego':ego,'ego_traj_list':ego_traj_list,'traj_builder':traj_builder,\
-                'goal_function':goal_function,'other':other,'other_traj_list':other_traj_list}
+                'goal_function':goal_function,'reactive_car':reactive_car,'non_reactive_car':non_reactive_car,'non_ego_traj_list':non_ego_traj_list}
         self.initialisation_params.update(kwargs)
 
         if goal_function is not None:
@@ -38,23 +38,24 @@ class GameTheoryDrivingController():
 
         self.traj_builder = traj_builder
 
-        self.setup(ego=ego,ego_traj_list=ego_traj_list,other=other,other_traj_list=other_traj_list)
+        self.setup(ego=ego,ego_traj_list=ego_traj_list,reactive_car=reactive_car,non_reactive_car=non_reactive_car,non_ego_traj_list=non_ego_traj_list)
 
         self.t = 0
         self.ego_traj_index = None
         self.ego_traj = None
 
-        self.other_time_distr = None
+        self.reactive_car_time_distr = None
+        self.non_reactive_car_time_distr = None
 
         self.write = write
 
         if write and "DUMMY" not in ego.label:
-            self.ego_preference_file = initialiseFile(PREFERENCE_FILENAME+"_{}".format(self.ego.label),self.ego.label,self.ego.timestep,other_traj_list)
-            self.other_preference_file = initialiseFile(PREFERENCE_FILENAME+"_{}".format(self.other.label),self.ego.label,self.ego.timestep,other_traj_list)
-            self.rollout_file = initialiseFile(ROLLOUT_FILENAME,self.ego.label,self.ego.timestep,other_traj_list)
+            self.ego_preference_file = initialiseFile(PREFERENCE_FILENAME+"_{}".format(self.ego.label),self.ego.label,self.ego.timestep,non_ego_traj_list)
+            self.reactive_car_preference_file = initialiseFile(PREFERENCE_FILENAME+"_{}".format(self.reactive_car.label),self.ego.label,self.ego.timestep,non_ego_traj_list)
+            self.rollout_file = initialiseFile(ROLLOUT_FILENAME,self.ego.label,self.ego.timestep,None)
 
 
-    def setup(self,ego=None,other=None,ego_traj_list=None,other_traj_list=None):
+    def setup(self,ego=None,ego_traj_list=None,reactive_car=None,non_reactive_car=None,non_ego_traj_list=None):
         if ego is not None:
             self.ego = ego
             self.ego_state = {} #gets updated in end step so neither agent has more information than the other
@@ -63,14 +64,22 @@ class GameTheoryDrivingController():
             self.ego_preference = [1/len(ego_traj_list) for _ in ego_traj_list]
             self.ego_preference_order = [0 for _ in range(len(self.ego_preference))]
             self.initialisation_params.update({'ego': ego, 'ego_traj_list': ego_traj_list})
-        if other is not None:
-            self.other = other
-            self.other_state = {} #gets updated in end step so neither agent has more information than the other
-            self.other_traj_list = other_traj_list
-            self.built_other_traj_list = [self.traj_builder.makeTrajectory(x,self.other.state) for x in self.other_traj_list]
-            self.other_preference = [1/len(other_traj_list) for _ in other_traj_list]
-            self.other_preference_order = [0 for _ in range(len(self.other_preference))]
-            self.initialisation_params.update({'other': other, 'other_traj_list': other_traj_list})
+        if reactive_car is not None:
+            self.reactive_car = reactive_car
+            self.reactive_car_state = {} #gets updated in end step so neither agent has more information than the other
+            self.reactive_car_traj_list = non_ego_traj_list
+            self.built_reactive_car_traj_list = [self.traj_builder.makeTrajectory(x,self.reactive_car.state) for x in self.reactive_car_traj_list]
+            self.reactive_car_preference = [1/len(self.reactive_car_traj_list) for _ in self.reactive_car_traj_list]
+            self.reactive_car_preference_order = [0 for _ in range(len(self.reactive_car_preference))]
+            self.initialisation_params.update({'reactive_car': reactive_car, 'reactive_car_traj_list': self.reactive_car_traj_list})
+        if non_reactive_car is not None:
+            self.non_reactive_car = non_reactive_car
+            self.non_reactive_car_state = {} #gets updated in end step so neither agent has more information than the other
+            self.non_reactive_car_traj_list = non_ego_traj_list
+            self.built_non_reactive_car_traj_list = [self.traj_builder.makeTrajectory(x,self.non_reactive_car.state) for x in self.non_reactive_car_traj_list]
+            self.non_reactive_car_preference = [1/len(self.non_reactive_car_traj_list) for _ in self.non_reactive_car_traj_list]
+            self.non_reactive_car_preference_order = [0 for _ in range(len(self.non_reactive_car_preference))]
+            self.initialisation_params.update({'non_reactive_car': non_reactive_car, 'non_reactive_car_traj_list': self.non_reactive_car_traj_list})
 
             self.policy_pairs = {}
             self.plausible_other_trajectory_indices = []
@@ -91,11 +100,17 @@ class GameTheoryDrivingController():
 
         is_cost_matrix_changed = False # we use this as another check if the equilibrium needs to be rechecked
 
-        if self.other_time_distr is None:
-            max_timesteps = int(max([x.traj_len_t/self.other.timestep for x in self.built_other_traj_list]))
+        if self.reactive_car_time_distr is None:
+            max_timesteps = int(max([x.traj_len_t/self.reactive_car.timestep for x in self.built_reactive_car_traj_list]))
             #self.other_time_distr = [1/max_timesteps for _ in range(max_timesteps+1)]
-            self.other_time_distr = [.99] + [.01/(max_timesteps-1) for _ in range(max_timesteps)]
-            self.other_time_distr = [x/sum(self.other_time_distr) for x in self.other_time_distr]
+            self.reactive_car_time_distr = [.99] + [.01/(max_timesteps-1) for _ in range(max_timesteps)]
+            self.reactive_car_time_distr = [x/sum(self.reactive_car_time_distr) for x in self.reactive_car_time_distr]
+
+        if self.non_reactive_car_time_distr is None:
+            max_timesteps = int(max([x.traj_len_t/self.non_reactive_car.timestep for x in self.built_non_reactive_car_traj_list]))
+            #self.other_time_distr = [1/max_timesteps for _ in range(max_timesteps+1)]
+            self.non_reactive_car_time_distr = [.99] + [.01/(max_timesteps-1) for _ in range(max_timesteps)]
+            self.non_reactive_car_time_distr = [x/sum(self.non_reactive_car_time_distr) for x in self.non_reactive_car_time_distr]
 
         t0 = datetime.datetime.now()
         t_cur = t0
@@ -106,42 +121,45 @@ class GameTheoryDrivingController():
             #Compute the costs each agent experiences based on the assumption that both agents obey the rules of
             # the road and don't want to crash
             # This reward matrix does not include individual preferences of either agents
-            self.E_global_cost,self.NE_global_cost = computeGlobalCostMatrix(self.t,self.ego,self.built_ego_traj_list,self.other,self.built_other_traj_list,self.other_time_distr)
+            self.E_global_cost,self.NE_global_cost = computeGlobalCostMatrix(self.t,self.ego,self.built_ego_traj_list,self.reactive_car,self.built_reactive_car_traj_list,self.reactive_car_time_distr)
             is_cost_matrix_changed = True
 
         t1 = datetime.datetime.now()
         print("Making Ego Trajectories and Computing Cost Matrix takes: {}".format((t1-t_cur).microseconds))
         t_cur = t1
         if self.t != 0:
-            self.other_time_distr = updateTimeDistr(self.other,self.other_state,self.built_other_traj_list,self.other_preference,self.other_time_distr,self.other.timestep)
+            self.reactive_car_time_distr = updateTimeDistr(self.reactive_car,self.reactive_car_state,self.built_reactive_car_traj_list,self.reactive_car_preference,self.reactive_car_time_distr,self.reactive_car.timestep)
+            self.non_reactive_car_time_distr = updateTimeDistr(self.non_reactive_car,self.non_reactive_car_state,self.built_non_reactive_car_traj_list,self.non_reactive_car_preference,self.non_reactive_car_time_distr,self.non_reactive_car.timestep)
             #print("Self time is: {}\tUpdated other time distribution is: {}".format(self.t,self.other_time_distr))
-            likely_other_t = [i for i,x in enumerate(self.other_time_distr) if x==max(self.other_time_distr)][0]*self.other.timestep
-            if likely_other_t == 0:
+            likely_reactive_car_t = [i for i,x in enumerate(self.reactive_car_time_distr) if x==max(self.reactive_car_time_distr)][0]*self.reactive_car.timestep
+            likely_non_reactive_car_t = [i for i,x in enumerate(self.non_reactive_car_time_distr) if x==max(self.non_reactive_car_time_distr)][0]*self.non_reactive_car.timestep
+            if likely_reactive_car_t == 0:
                 #If most likely time is 0 then we believe other agent must have completed their last trajectory. Therefore we rebuild new trajectories based on the assumption they
                 # must choose a new one
                 #print(f"Rebuilding Trajectories for {self.other.label}")
-                self.built_other_traj_list = [self.traj_builder.makeTrajectory(x,self.other.state) for x in self.other_traj_list]
-                self.E_global_cost,self.NE_global_cost = computeGlobalCostMatrix(self.t,self.ego,self.built_ego_traj_list,self.other,self.built_other_traj_list,self.other_time_distr)
+                self.built_reactive_car_traj_list = [self.traj_builder.makeTrajectory(x,self.reactive_car.state) for x in self.reactive_car_traj_list]
+                self.E_global_cost,self.NE_global_cost = computeGlobalCostMatrix(self.t,self.ego,self.built_ego_traj_list,self.reactive_car,self.built_reactive_car_traj_list,self.reactive_car_time_distr)
                 is_cost_matrix_changed = True
             self.ego_preference = updatePreference(self.t,self.ego,self.ego_state,self.built_ego_traj_list,self.ego_preference)
-            self.other_preference = updatePreference(likely_other_t,self.other,self.other_state,self.built_other_traj_list,self.other_preference)
+            self.reactive_car_preference = updatePreference(likely_reactive_car_t,self.reactive_car,self.reactive_car_state,self.built_reactive_car_traj_list,self.reactive_car_preference)
+            self.non_reactive_car_preference = updatePreference(likely_non_reactive_car_t,self.non_reactive_car,self.non_reactive_car_state,self.built_non_reactive_car_traj_list,self.non_reactive_car_preference)
             print("Updating other preferences takes: {}".format((datetime.datetime.now()-t_cur).microseconds))
             t_cur = datetime.datetime.now()
 
-        print(f"\nPreferences are: \t\t{self.ego_traj_list}\nEgo: \t{self.ego_preference}\nNon-Ego: \t{self.other_preference}\n")
+        print(f"\nPreferences are: \t\t{self.ego_traj_list}\nEgo: \t{self.ego_preference}\nReactive: \t{self.reactive_car_preference}\nNon Reactive: \t{self.non_reactive_car_preference}\n")
 
 
         ego_preference_order = [self.ego_preference.index(x) for x in sorted(self.ego_preference)]
-        other_preference_order = [self.other_preference.index(x) for x in sorted(self.other_preference)]
+        reactive_car_preference_order = [self.reactive_car_preference.index(x) for x in sorted(self.reactive_car_preference)]
 
         #The nash equilibrium is used to identify what the other person is likely to do. If they don't believe either agent's preferences have changed then the
         # equilibrium will be the same.
-        if is_cost_matrix_changed or ego_preference_order != self.ego_preference_order or other_preference_order != self.other_preference_order:
+        if is_cost_matrix_changed or ego_preference_order != self.ego_preference_order or reactive_car_preference_order != self.reactive_car_preference_order:
             #First step we will estimate the cost matrix that NE estimates in order to determine what they
             #  are motivated to do.
 
             self.ego_preference_order = list(ego_preference_order)
-            self.other_preference_order = list(other_preference_order)
+            self.reactive_car_preference_order = list(reactive_car_preference_order)
 
             E_cost_estimate = list(self.E_global_cost)
             NE_cost_estimate = list(self.NE_global_cost)
@@ -159,7 +177,7 @@ class GameTheoryDrivingController():
             for i,row in enumerate(NE_cost_estimate):
                 new_row = []
                 for j,entry in enumerate(row):
-                    if entry != -1: entry = self.other_preference[i]
+                    if entry != -1: entry = self.reactive_car_preference[i]
                     #if entry != -1: _, entry = computeReward(self.t,self.ego.copy(),self.built_ego_traj_list[j],self.other.copy(),self.built_other_traj_list[i],self.other_time_distr,\
                     #        veh1_reward_function=self.goal_function,veh2_reward_function=main.changeLaneRightRewardFunction)
                     new_row.append(entry)
@@ -232,8 +250,8 @@ class GameTheoryDrivingController():
                         NE_best_policies.append(a)
 
             self.policy_pairs = {}
-            self.plausible_other_trajectory_indices = []
-            unseen_indices = [i for i in range(len(self.built_other_traj_list))]
+            self.plausible_reactive_car_trajectory_indices = []
+            unseen_indices = [i for i in range(len(self.built_reactive_car_traj_list))]
             for i in NE_best_policies:
                 if tuple(NE_policies[i]) not in self.policy_pairs:
                     self.policy_pairs[tuple(NE_policies[i])] = list(E_policies[i])
@@ -241,12 +259,12 @@ class GameTheoryDrivingController():
                     if unseen_indices!=[]:
                         for j,val in enumerate(NE_policies[i]):
                             if val>0 and j in unseen_indices:
-                                self.plausible_other_trajectory_indices.append(j)
+                                self.plausible_reactive_car_trajectory_indices.append(j)
                                 unseen_indices.remove(j)
                 else:
                     self.policy_pairs[tuple(NE_policies[i])] = [x+y for x,y in zip(self.policy_pairs[tuple(NE_policies[i])],E_policies[i])]
 
-        print("Plausible Trajectory indices for other are: {}".format(self.plausible_other_trajectory_indices))
+        print("Plausible Trajectory indices for reactive car are: {}".format(self.plausible_reactive_car_trajectory_indices))
 
         #INSTEAD THE BEST POLICIES ARE WHAT THE NE_AGENT MIGHT DO, WE MUST COMPUTE THE BEST RESPONSE TO EACH ONE
         # GIVEN THE TRUE E REWARD FUNCTION, AND THEN THAT IS E'S BEHAVIOUR
@@ -284,7 +302,7 @@ class GameTheoryDrivingController():
         #print("\n")
         E_cost_second_estimate = []
 
-        other_time_distr = list(self.other_time_distr)
+        reactive_car_time_distr = list(self.reactive_car_time_distr)
         #dummy_trajectories = [self.traj_builder.makeTrajectory(x,dummy_ego.state) for x in self.ego_traj_list]
         #Want to prevent the controller cancelling and then reinitialising the same trajectory for extra points
         #So we generate all possible next steps, then omit the one the agent is currently on (see "orig_index = ...")
@@ -296,22 +314,26 @@ class GameTheoryDrivingController():
             orig_index = self.ego_traj_list.index(orig_label)
             putCarOnTraj(dummy,ego_traj,ego_traj.traj_len_t)
             possible_trajectories = [self.traj_builder.makeTrajectory(x,dummy.state) for i,x in enumerate(self.ego_traj_list) if i!=orig_index]
-            other_t_offset = ego_traj.traj_len_t-self.t
+            reactive_car_t_offset = ego_traj.traj_len_t-self.t
 
-            for i,other_traj in enumerate(self.built_other_traj_list):
+            for i,reactive_car_traj in enumerate(self.built_reactive_car_traj_list):
                 #we believe that the rational agent has no reason to perform these trajectories
                 # no point wasting time computing the reward for them
-                if i not in self.plausible_other_trajectory_indices: new_row.append(0)
+                if i not in self.plausible_reactive_car_trajectory_indices: new_row.append(0)
                 else:
                     #val,_ = computeReward(self.t,self.ego.copy(),ego_traj,self.other.copy(),other_traj,self.other_time_distr,veh1_reward_function=self.goal_function)
-                    val_e,val_other = computeReward(self.t,self.ego.copy(),ego_traj,self.other.copy(),other_traj,self.other_time_distr,veh1_reward_function=self.goal_function)
+                    val_e,val_other = computeReward(self.t,self.ego.copy(),ego_traj,self.reactive_car.copy(),reactive_car_traj,self.reactive_car_time_distr,non_reactive_car=self.non_reactive_car.copy(),\
+                            non_reactive_car_trajectories=self.built_non_reactive_car_traj_list,non_reactive_car_preference=self.non_reactive_car_preference,\
+                            non_reactive_car_time_distr=self.non_reactive_car_time_distr,veh1_reward_function=self.goal_function)
                     #print("Reward to {} for performing {} when {} performs {} is {}".format(self.ego.label,ego_traj.label,self.other.label,other_traj.label,val_e))
                     if val_e != -1:
                         if ego_traj_choices != self.built_ego_traj_list:
                             #shift time forward by the appropriate amount
-                            dummy_time_distr = other_time_distr[-1-int(other_t_offset/self.ego.timestep):] + other_time_distr[:-1-int(other_t_offset/self.ego.timestep)]
+                            dummy_time_distr = reactive_car_time_distr[-1-int(reactive_car_t_offset/self.ego.timestep):] + reactive_car_time_distr[:-1-int(reactive_car_t_offset/self.ego.timestep)]
+                            dummy_non_reactive_car_time_distr = self.non_reactive_car_time_distr[-1-int(reactive_car_t_offset/self.ego.timestep):] + self.non_reactive_car_time_distr[:-1-int(reactive_car_t_offset/self.ego.timestep)]
                             #max_possible_reward = max([computeReward(0,dummy_ego.copy(),x,dummy_other.copy(),other_traj,dummy_time_distr,veh1_reward_function=self.goal_function)[0] for x in dummy_trajectories])
-                            possible_rewards = [computeReward(0,self.ego.copy(),x,self.other.copy(),other_traj,dummy_time_distr,veh1_reward_function=self.goal_function)[0] for x in possible_trajectories]
+                            possible_rewards = [computeReward(0,self.ego.copy(),x,self.reactive_car.copy(),reactive_car_traj,dummy_time_distr,self.non_reactive_car.copy(),\
+                                    self.built_non_reactive_car_traj_list,self.non_reactive_car_preference,dummy_non_reactive_car_time_distr,veh1_reward_function=self.goal_function)[0] for x in possible_trajectories]
                             print("Possible Rewards for {} are: {}".format(ego_traj.label,possible_rewards))
                             max_possible_reward = max(possible_rewards)
                             #val_e += (.9**(ego_traj.traj_len_t-self.t))*max_possible_reward
@@ -366,7 +388,7 @@ class GameTheoryDrivingController():
                 for i in range(len(other_does)):
                     #ep += NE_p[i]*E_cost_second_estimate[j][i]
                     #ep += self.other_preference[i]*NE_p[i]*E_cost_second_estimate[j][i]
-                    ep += other_does[i]*self.other_preference[i]*E_cost_second_estimate[j][i]
+                    ep += other_does[i]*self.reactive_car_preference[i]*E_cost_second_estimate[j][i]
                 payoff += [prob_other_policy*ep]
             expected_payoffs.append(list(payoff))
 
@@ -436,12 +458,13 @@ class GameTheoryDrivingController():
     def updateStates(self):
         """Store the current state of the agents"""
         self.ego_state = dict(self.ego.state)
-        self.other_state = dict(self.other.state)
+        self.reactive_car_state = dict(self.reactive_car.state)
+        self.non_reactive_car_state = dict(self.non_reactive_car.state)
 
 
     def closeFiles(self):
         self.ego_preference_file.close()
-        self.other_preference_file.close()
+        self.reactive_car_preference_file.close()
         self.rollout_file.close()
 
 
@@ -452,10 +475,11 @@ class GameTheoryDrivingController():
         #pass
         self.updateStates()
         if self.write:
-            writeToFile(self.other_preference_file,self.other_preference)
+            writeToFile(self.reactive_car_preference_file,self.reactive_car_preference)
             writeToFile(self.ego_preference_file,self.ego_preference)
             writeToFile(self.rollout_file,self.ego.state)
-            writeToFile(self.rollout_file,self.other.state)
+            #makes it easier to plot multiple files simultaneously if each writes to individual file
+            #writeToFile(self.rollout_file,self.reactive_car.state)
             self.rollout_file.write("\n")
         #HERE WE WILL UPDATE COMPLIANCE (BETA)
 
@@ -608,6 +632,8 @@ def checkForLaneCrossing(veh):
 def checkForCrash(veh1,traj1,t1,veh2,traj2,t2,radius=-1):
     t =0
     r1,r2 = 0,0
+    if radius == 1:
+        radius = 2*computeDistance((veh2.x_com,veh2.y_com),veh2.four_corners["front_left"]) + .5
     while(t1+t<=traj1.traj_len_t and t2+t<=traj2.traj_len_t):
         putCarOnTraj(veh1,traj1,t1+t)
         putCarOnTraj(veh2,traj2,t2+t)
@@ -623,7 +649,7 @@ def checkForCrash(veh1,traj1,t1,veh2,traj2,t2,radius=-1):
     return r1,r2
 
 
-def computeReward(init_t1,veh1,traj1,veh2,traj2,veh2_time_distr,veh1_reward_function=None,veh2_reward_function=None):
+def computeReward(init_t1,veh1,traj1,veh2,traj2,veh2_time_distr,non_reactive_car=None,non_reactive_car_trajectories=None,non_reactive_car_preference=None,non_reactive_car_time_distr=None,veh1_reward_function=None,veh2_reward_function=None):
     #print("\nComputing Reward: {} performing: {}, {} Performing {}".format(veh1.label,traj1.label,veh2.label,traj2.label))
     init_veh1 = veh1.copy()
     init_veh2 = veh2.copy()
@@ -635,7 +661,7 @@ def computeReward(init_t1,veh1,traj1,veh2,traj2,veh2_time_distr,veh1_reward_func
     #print("Init_t1 is {}\tInit_t2 is: {}".format(init_t1,init_t2))
 
     #NOTE: COME BACK TO THIS LATER AND COME UP WITH A BETTER WAY OF ESTIMATING RADIUS. SHOULD INCREASE OVER TIME AS ESTIMATION CERTAINTY DECREASES
-    radius = 2*computeDistance((veh1.x_com,veh1.y_com),veh1.four_corners["front_left"]) + .5
+    radius = 2*computeDistance((veh2.x_com,veh2.y_com),veh2.four_corners["front_left"]) + .5
 
     r1,r2 = checkForCrash(veh1,traj1,init_t1,veh2,traj2,init_t2,radius)
 
@@ -667,6 +693,23 @@ def computeReward(init_t1,veh1,traj1,veh2,traj2,veh2_time_distr,veh1_reward_func
             r1 = veh1_reward_function(init_veh1,veh1)
         if veh2_reward_function is not None and r2!=-1:
             r2 = veh2_reward_function(init_veh2,veh2)
+
+    if non_reactive_car is not None:
+        #Checking for Collision with Non-Reactive Vehicle in the Environment
+        new_r1,new_r2 = 0,0
+        init_t_non_reactive = min([i for i,prob in enumerate(non_reactive_car_time_distr) if prob == max(non_reactive_car_time_distr)])*non_reactive_car.timestep
+        for i,traj in enumerate(non_reactive_car_trajectories):
+            if non_reactive_car_preference[i]>.01:
+                if r1 != -1:
+                    r1_val,_ = checkForCrash(veh1,traj1,init_t1,non_reactive_car,traj,init_t_non_reactive,radius)
+                    new_r1 += r1_val*non_reactive_car_preference[i]
+
+                if r2 != -1:
+                    r2_val,_ = checkForCrash(veh2,traj2,init_t2,non_reactive_car,traj,init_t_non_reactive,radius)
+                    new_r2 += r2_val*non_reactive_car_preference[i]
+
+        r1 += new_r1
+        r2 += new_r2
 
     #print("Returning: R1: {}\tR2: {}".format(r1,r2))
     return r1,r2

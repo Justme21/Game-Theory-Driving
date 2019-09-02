@@ -1,3 +1,6 @@
+#import game_theory_controller_classes_three_car as gtcc
+import reactive_controller_classes as rcc
+#from reactive_controller_classes import ReactiveDrivingController
 from trajectory_controller_classes import TrajectoryDrivingController
 from trajectory_type_definitions import TrajectoryClasses
 from trajectory_type_definitions import evaluate,putCarOnTraj
@@ -5,6 +8,7 @@ from trajectory_type_definitions import evaluate,putCarOnTraj
 
 import datetime
 import game_theory_controller_classes as gtcc
+import game_theory_controller_classes_three_car as gtcc3
 import math
 import matplotlib.pyplot as plt
 import nashpy as nash
@@ -23,6 +27,8 @@ from vehicle_classes import sideOfLine
 SAFE_DISTANCE = None
 MIN_FRONT_BACK_DISTANCE,MIN_SIDE_DISTANCE = None,None
 
+VEHICLE = None
+
 def initialiseSimulator(cars,speed_limit,graphics,init_speeds,lane_width=None,data_generation=False):
     """Takes in a list of cars and a boolean indicating whether to produce graphics.
        Outputs the standard straight road simulator environment with the input cars initialised
@@ -40,14 +46,14 @@ def initialiseSimulator(cars,speed_limit,graphics,init_speeds,lane_width=None,da
     road_lengths = [4,60] #Shorter track for generating results
     junc_pairs = [(0,1),(1,2)]
 
-    starts = [[(0,1),1],[(0,1),0]] #Follower car is initialised on the first road, leading car on the 3rd (assuring space between them)
-    dests = [[(1,2),0],[(1,2),0]] #Simulation ends when either car passes the end of the 
+    starts = [[(0,1),1],[(0,1),1],[(0,1),0]] #Follower car is initialised on the first road, leading car on the 3rd (assuring space between them)
+    dests = [[(1,2),0],[(1,2),0],[(1,2),0]] #Simulation ends when either car passes the end of the 
 
     run_graphics = graphics
     draw_traj = False #trajectories are uninteresting by deafault
     debug = False #don't want debug mode
 
-    runtime = 4.2 #120.0 #max runtime; simulation will terminate if run exceeds this length of time
+    runtime = 4 #120.0 #max runtime; simulation will terminate if run exceeds this length of time
 
     #Initialise the simulator object, load vehicles into the simulation, then initialise the action simulation
     sim = simulator.Simulator(run_graphics,draw_traj,runtime,debug,dt=cars[0].timestep)
@@ -368,13 +374,16 @@ if __name__ == "__main__":
 
     time_len = 3
     traj_classes = TrajectoryClasses(time_len=time_len,lane_width=lane_width,accel_range=accel_range,jerk=jerk)
-    #traj_classes_2 = TrajectoryClasses(time_len=1.2*time_len,lane_width=lane_width,accel_range=accel_range,jerk=jerk)
+    traj_classes_2 = TrajectoryClasses(time_len=1.2*time_len,lane_width=lane_width,accel_range=accel_range,jerk=jerk)
     traj_types = traj_classes.traj_types.keys()
 
-    veh1 = vehicle_classes.Car(controller=None,is_ego=False,debug=debug,label="Non-Ego",timestep=dt)
+    veh0 = vehicle_classes.Car(controller=None,is_ego=False,debug=debug,label="Lane-Lead",timestep=dt)
+    veh1 = vehicle_classes.Car(controller=None,is_ego=False,debug=debug,label="Lane-Follow",timestep=dt)
+    #veh1 = vehicle_classes.Car(controller=None,is_ego=False,debug=debug,label="Non-Ego",timestep=dt)
     veh2 = vehicle_classes.Car(controller=None,is_ego=True,debug=debug,label="Ego",timestep=dt)
 
-    sim = initialiseSimulator([veh1,veh2],speed_limit,graphics,[speed_limit/2,speed_limit/2],lane_width,False)
+    #sim = initialiseSimulator([veh1,veh2],speed_limit,graphics,[speed_limit/2,speed_limit/2],lane_width,False)
+    sim = initialiseSimulator([veh0,veh1,veh2],speed_limit,graphics,[speed_limit/2,speed_limit/2,speed_limit/2],lane_width,False)
     #sim = initialiseSimulator([veh1],speed_limit,True,[speed_limit/2],lane_width,False)
     veh2.heading = (veh2.heading+180)%360
     veh2.y_com  = veh1.y_com
@@ -382,22 +391,41 @@ if __name__ == "__main__":
     veh2.initialisation_params["heading"] = veh2.heading
     veh2.sense()
 
-    #sim.drawSimulation()
+    veh0.setMotionParams(posit=(veh0.x_com,veh1.y_com - 2*veh0.length))
+    veh0.initialisation_params["prev_disp_y"] = veh1.initialisation_params["prev_disp_y"] - 1.5*veh0.length
+    veh1.setMotionParams(posit=(veh1.x_com,veh1.y_com+veh1.length/2))
+    veh1.initialisation_params["prev_disp_y"] += veh1.length
+    veh1.sense()
+
+    print("Veh0 is {} at {}".format(veh0.label,veh0.state))
+    print("Veh1 is {} at {}".format(veh1.label,veh1.state))
+
+    veh0.crashed = False
+    veh1.crashed = False
+
+    sim.drawSimulation()
 
     #const_vel_controller = lcc.DrivingController("constant",speed_limit=speed_limit)
     veh1_traj_list = list(traj_types)
     veh2_traj_list = list(traj_types)
-    #veh1_traj_list.remove("ES")
-    #veh2_traj_list.remove("ES")
+    veh1_traj_list.remove("ES")
+    veh2_traj_list.remove("ES")
     #veh1_traj_list = [traj_classes.makeTrajectory(x,veh1.state) for x in traj_types]
     #veh2_traj_list = [traj_classes.makeTrajectory(x,veh2.state) for x in traj_types]
     #veh1_controller = gtcc.GameTheoryDrivingController(veh1,veh1_traj_list,traj_classes,other=veh2,other_traj_list=veh2_traj_list)
-    veh1_controller = gtcc.GameTheoryDrivingController(veh1,veh1_traj_list,traj_classes,goal_function=accelerateRewardFunction,other=veh2,other_traj_list=veh2_traj_list,write=False)
+    veh0_traj_controller = TrajectoryDrivingController(veh0,traj_classes,"NA",veh0.timestep,write=True)
+    #veh1_controller = gtcc.GameTheoryDrivingController(veh1,veh1_traj_list,traj_classes,goal_function=accelerateRewardFunction,other=veh2,other_traj_list=veh2_traj_list,write=False)
     #veh1_traj_controller = TrajectoryDrivingController(veh1,traj_classes,"LCR",veh1.timestep,write=False)
-    veh2_controller = gtcc.GameTheoryDrivingController(veh2,veh2_traj_list,traj_classes,goal_function=changeLaneLeftRewardFunction,other=veh1,other_traj_list=veh1_traj_list,write=False)
+    veh1_reactive_controller = rcc.ReactiveDrivingController(veh1,traj_classes,"D",other=veh2,trajectory_list=list(traj_types),timestep=veh1.timestep,write=True)
+    #veh2_controller = gtcc.GameTheoryDrivingController(veh2,veh2_traj_list,traj_classes,goal_function=changeLaneLeftRewardFunction,other=veh1,other_traj_list=veh1_traj_list,write=True)
+    veh2_controller = gtcc3.GameTheoryDrivingController(veh2,veh2_traj_list,traj_classes,goal_function=changeLaneLeftRewardFunction,reactive_car=veh1,non_ego_traj_list=veh1_traj_list,\
+            non_reactive_car=veh0,write=True)
     #veh2_traj_controller = TrajectoryDrivingController(veh2,traj_classes,"A",veh2.timestep,write=False)
 
-    veh1.addControllers({"game_theory":veh1_controller})
+    veh0.addControllers({"game_theory":veh0_traj_controller})
+    veh0.setController(tag="game_theory")
+
+    veh1.addControllers({"game_theory":veh1_reactive_controller})
     veh2.addControllers({"game_theory":veh2_controller})
 
     veh1.setController(tag="game_theory")
@@ -405,8 +433,10 @@ if __name__ == "__main__":
 
     sim.runComplete()
 
-    if veh1_controller.write:
-        veh1_controller.closeFiles()
+    if veh0_traj_controller.write:
+        veh0_traj_controller.closeFiles()
+    if veh1_reactive_controller.write:
+        veh1_reactive_controller.closeFiles()
     if veh2_controller.write:
         veh2_controller.closeFiles()
     print("Files are closed")

@@ -51,7 +51,7 @@ class GameTheoryDrivingController():
         if write and "DUMMY" not in ego.label:
             self.ego_preference_file = initialiseFile(PREFERENCE_FILENAME+"_{}".format(self.ego.label),self.ego.label,self.ego.timestep,other_traj_list)
             self.other_preference_file = initialiseFile(PREFERENCE_FILENAME+"_{}".format(self.other.label),self.ego.label,self.ego.timestep,other_traj_list)
-            self.rollout_file = initialiseFile(ROLLOUT_FILENAME,self.ego.label,self.ego.timestep,other_traj_list)
+            self.rollout_file = initialiseFile(ROLLOUT_FILENAME,self.ego.label,self.ego.timestep,None)
 
 
     def setup(self,ego=None,other=None,ego_traj_list=None,other_traj_list=None):
@@ -455,7 +455,7 @@ class GameTheoryDrivingController():
             writeToFile(self.other_preference_file,self.other_preference)
             writeToFile(self.ego_preference_file,self.ego_preference)
             writeToFile(self.rollout_file,self.ego.state)
-            writeToFile(self.rollout_file,self.other.state)
+            #writeToFile(self.rollout_file,self.other.state)
             self.rollout_file.write("\n")
         #HERE WE WILL UPDATE COMPLIANCE (BETA)
 

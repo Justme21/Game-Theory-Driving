@@ -44,7 +44,14 @@ class ReactiveDrivingController():
             exit(-1)
 
         if self.trajectory is None:
-            self.trajectory = self.traj_builder.makeTrajectory(self.traj_label,self.ego.state)
+            #Ego is ahead of the other car, not going to give way
+            if self.ego.four_corners["front_right"][1]<self.other.four_corners["back_right"][1]:
+                self.trajectory = self.traj_builder.makeTrajectory("NA",self.ego.state)
+            else:
+                self.trajectory = self.traj_builder.makeTrajectory("D",self.ego.state)
+
+#        if self.trajectory is None:
+#            self.trajectory = self.traj_builder.makeTrajectory(self.traj_label,self.ego.state)
 
 #        if (not self.has_adjusted) and self.other is not None and isinstance(self.other.controller,GameTheoryDrivingController):
 #            print("Reactive Controller reacting")
@@ -72,7 +79,7 @@ class ReactiveDrivingController():
             #print(f"TCC: {self.ego.label} has completed their trajectory")
             #exit(-1)
             if self.trajectory.label != self.traj_label:
-                self.trajectory = self.traj_builder.makeTrajectory(slef.traj_label,self.ego.state)
+                self.trajectory = self.traj_builder.makeTrajectory(self.traj_label,self.ego.state)
                 self.time = 0
                 action = self.trajectory.action(self.time,self.ego.Lf+self.ego.Lr)
             else:

@@ -22,10 +22,14 @@ class GameTheoryDrivingController():
 
     def __init__(self,ego,ego_traj_list,traj_builder,goal_function=None,other=None,other_traj_list=None,write=False,**kwargs):
 
+        #####################################################################################################################
+        #Initialisation params allow use to reinitialise the controller accurately.
         self.initialisation_params = {'ego':ego,'ego_traj_list':ego_traj_list,'traj_builder':traj_builder,\
                 'goal_function':goal_function,'other':other,'other_traj_list':other_traj_list}
         self.initialisation_params.update(kwargs)
 
+        ####################################################################################################################
+        #Goal and Cost Function specification
         if goal_function is not None:
             #Specified goal used to compute reward
             self.goal_function = goal_function
@@ -36,18 +40,25 @@ class GameTheoryDrivingController():
         self.E_global_cost = None
         self.NE_global_cost = None
 
-        self.traj_builder = traj_builder
+        ####################################################################################################################
+        #Set up controller objects required for operation
+        self.traj_builder = traj_builder #traj builder is the method that takes a trajectory specification and returns an executable trajectory
 
         self.setup(ego=ego,ego_traj_list=ego_traj_list,other=other,other_traj_list=other_traj_list)
 
-        self.t = 0
-        self.ego_traj_index = None
-        self.ego_traj = None
+        ###################################################################################################################
+        #Controller Parameters
+        self.t = 0 #current time along the current trajectory
+        self.ego_traj_index = None #index of the trajectory (in traj_list) being followed by ego
+        self.ego_traj = None #executable trajectory being followed by ego
 
+        #Bayes filter is used to account for uncertainty over where along a trajectory the non-ego agent is.
         self.other_time_distr = None
 
-        self.write = write
+        self.write = write #Whether or not to record the controller output for this agent
 
+        #Cars can make non-interactive duplicates to hypothesise about the consequences of rollouts without crashing. All duplicates have "DUMMY" suffix to their
+        # vehicle label. The duplicates are otherwise identical instantiations. But we do not want to record their controller outputs. 
         if write and "DUMMY" not in ego.label:
             self.ego_preference_file = initialiseFile(PREFERENCE_FILENAME+"_{}".format(self.ego.label),self.ego.label,self.ego.timestep,other_traj_list)
             self.other_preference_file = initialiseFile(PREFERENCE_FILENAME+"_{}".format(self.other.label),self.ego.label,self.ego.timestep,other_traj_list)
@@ -55,14 +66,15 @@ class GameTheoryDrivingController():
 
 
     def setup(self,ego=None,other=None,ego_traj_list=None,other_traj_list=None):
+        """Standard setup routine. Specify ego (the car being controlled) and other (the car whose behaviour control is conditioned on (if exists)"""
         if ego is not None:
             self.ego = ego
             self.ego_state = {} #gets updated in end step so neither agent has more information than the other
-            self.ego_traj_list = ego_traj_list
-            self.built_ego_traj_list = None
-            self.ego_preference = [1/len(ego_traj_list) for _ in ego_traj_list]
+            self.ego_traj_list = ego_traj_list # list of trajectories/trajectory types available to the ego agent
+            self.built_ego_traj_list = None #list of constructed trajectories for the ego agent (selectAction builds trajectories if necessary)
+            self.ego_preference = [1/len(ego_traj_list) for _ in ego_traj_list] #Preference distribution. Initially uniform distribution
             self.ego_preference_order = [0 for _ in range(len(self.ego_preference))]
-            self.initialisation_params.update({'ego': ego, 'ego_traj_list': ego_traj_list})
+            self.initialisation_params.update({'ego': ego, 'ego_traj_list': ego_traj_list}) #Init params allows for duplication
         if other is not None:
             self.other = other
             self.other_state = {} #gets updated in end step so neither agent has more information than the other
@@ -72,57 +84,79 @@ class GameTheoryDrivingController():
             self.other_preference_order = [0 for _ in range(len(self.other_preference))]
             self.initialisation_params.update({'other': other, 'other_traj_list': other_traj_list})
 
+            #How to store interaction objects: The possible combination of (ego,other) trajectories, and the plausible equilibiria. 
             self.policy_pairs = {}
             self.plausible_other_trajectory_indices = []
 
 
     def selectAction(self,*args):
+        """Called by vehicle to choose acceleration-wheel angle pairs"""
+        #This is where the magic happens. Is very messy
+
+        #################################################################################################
+        #DEBUG TEXT
         print(f"\n Selecting Action for: {self.ego.label}")
         if self.ego_traj is not None:
             if abs(self.ego_traj.velocity(self.t)-self.ego_state["velocity"])>1:
                 print("Velocity Error:\nEgo: {}\nShould be: {} per {}".format(self.ego_state,self.ego_traj.state(self.t,self.ego.Lr+self.ego.Lf),self.ego_traj.label))
                 exit(-1)
 
-        #We maintain an estimate of both agents preferences in order to approximate a perspective
-        #common to both agents
-
+        #################################################################################################
+        #PREAMBLE
         #print("\nEgo State: {}".format(self.ego.state))
         #print("Non-Ego State: {}\n".format(self.other.state))
 
-        is_cost_matrix_changed = False # we use this as another check if the equilibrium needs to be rechecked
+        is_cost_matrix_changed = False # we use this as another check if the equilibrium needs to be recomputed
 
+        ##################################################################################################
+        #INITIALISE OTHER TIME DISTRIBUTION
+        #We have no esitmate of wheree along their trajectory the other agent is. Initialise the distribution
         if self.other_time_distr is None:
             max_timesteps = int(max([x.traj_len_t/self.other.timestep for x in self.built_other_traj_list]))
             #self.other_time_distr = [1/max_timesteps for _ in range(max_timesteps+1)]
             self.other_time_distr = [.99] + [.01/(max_timesteps-1) for _ in range(max_timesteps)]
             self.other_time_distr = [x/sum(self.other_time_distr) for x in self.other_time_distr]
 
+        #Time values used to measure the runtime for different parts of the operation to see what is taking the most computation time
         t0 = datetime.datetime.now()
         t_cur = t0
+
+        ##################################################################################################
+        #INITIALISE EGO TRAJECTORIES AND GLOBAL COST MATRIX
+        #If ego_traj is None for an agent then we need to initialise the set of possible executable trajectories based on the trajectories specified in traj list
         if self.ego_traj is None:
             #print("Ego is resetting trajectories")
             self.built_ego_traj_list = [self.traj_builder.makeTrajectory(x,self.ego.state) for x in self.ego_traj_list]
 
             #Compute the costs each agent experiences based on the assumption that both agents obey the rules of
             # the road and don't want to crash
-            # This reward matrix does not include individual preferences of either agents
+            # This reward matrix does not include individual preferences of either agent
             self.E_global_cost,self.NE_global_cost = computeGlobalCostMatrix(self.t,self.ego,self.built_ego_traj_list,self.other,self.built_other_traj_list,self.other_time_distr)
             is_cost_matrix_changed = True
 
         t1 = datetime.datetime.now()
         print("Making Ego Trajectories and Computing Cost Matrix takes: {}".format((t1-t_cur).microseconds))
         t_cur = t1
+
+        ###################################################################################################
+        #UPDATE PREFERENCES
+        #We define preference as a distribution over the different trajectory options. This is done using a bayes filter comparing the realised trajectory
+        # with the behaviour at the estimated time for each trajectory type.
+        #We maintain an estimate of both agents preferences in order to approximate a perspective common to both agents as we only use exogeneous features
+        # to perform the estimation
+
+        #self.t measures trajectory runtime. At t=0 no one has moved and nothing has happened
         if self.t != 0:
             self.other_time_distr = updateTimeDistr(self.other,self.other_state,self.built_other_traj_list,self.other_preference,self.other_time_distr,self.other.timestep)
             #print("Self time is: {}\tUpdated other time distribution is: {}".format(self.t,self.other_time_distr))
-            likely_other_t = [i for i,x in enumerate(self.other_time_distr) if x==max(self.other_time_distr)][0]*self.other.timestep
+            likely_other_t = [i for i,x in enumerate(self.other_time_distr) if x==max(self.other_time_distr)][0]*self.other.timestep #pick the earliest most likely time
             if likely_other_t == 0:
                 #If most likely time is 0 then we believe other agent must have completed their last trajectory. Therefore we rebuild new trajectories based on the assumption they
                 # must choose a new one
                 #print(f"Rebuilding Trajectories for {self.other.label}")
                 self.built_other_traj_list = [self.traj_builder.makeTrajectory(x,self.other.state) for x in self.other_traj_list]
                 self.E_global_cost,self.NE_global_cost = computeGlobalCostMatrix(self.t,self.ego,self.built_ego_traj_list,self.other,self.built_other_traj_list,self.other_time_distr)
-                is_cost_matrix_changed = True
+                is_cost_matrix_changed = True #cost matrix has changed, this means we will need to recompute equilibria
             self.ego_preference = updatePreference(self.t,self.ego,self.ego_state,self.built_ego_traj_list,self.ego_preference)
             self.other_preference = updatePreference(likely_other_t,self.other,self.other_state,self.built_other_traj_list,self.other_preference)
             print("Updating other preferences takes: {}".format((datetime.datetime.now()-t_cur).microseconds))
@@ -130,7 +164,9 @@ class GameTheoryDrivingController():
 
         print(f"\nPreferences are: \t\t{self.ego_traj_list}\nEgo: \t{self.ego_preference}\nNon-Ego: \t{self.other_preference}\n")
 
-
+        ####################################################################################################
+        #UPDATE COST MATRICES
+        #List of trajectories ordered by preference for each agent
         ego_preference_order = [self.ego_preference.index(x) for x in sorted(self.ego_preference)]
         other_preference_order = [self.other_preference.index(x) for x in sorted(self.other_preference)]
 
@@ -146,6 +182,9 @@ class GameTheoryDrivingController():
             E_cost_estimate = list(self.E_global_cost)
             NE_cost_estimate = list(self.NE_global_cost)
 
+            #Compute NE's estimate of E's motivations
+            # The global cost only captures crashes or going off the road, both of which get reward of -1.
+            # All the other entries are replace with NE's estimte of E's preferenc for the corresponding trajectory
             for i,row in enumerate(E_cost_estimate):
                 new_row = []
                 for j,entry in enumerate(row):
@@ -156,6 +195,7 @@ class GameTheoryDrivingController():
                     new_row.append(entry)
                 E_cost_estimate[i] = list(new_row)
 
+            #Compute E's estimate of NE's motivation
             for i,row in enumerate(NE_cost_estimate):
                 new_row = []
                 for j,entry in enumerate(row):
@@ -178,6 +218,9 @@ class GameTheoryDrivingController():
                 print(row)
             print("Ending print of NE's estimated cost matrix\n")
 
+            ############################################################################################
+            #COMPUTE EQUILIBRIA
+
             #These policies give us the optimal policies for E to follow under the assumption that
             # NE is rational and the assumption that the preferences have been correctly estimated
             E_policies,NE_policies = computeNashEquilibria(E_cost_estimate,NE_cost_estimate)
@@ -185,20 +228,8 @@ class GameTheoryDrivingController():
             print("Computing Nash Equilibrium takes: {}".format((t3-t2).microseconds))
             t_cur = t3
 
-            #print(f"\n\nSelecting Action for {self.ego.label}")
-            #print("E Cost Estimate:")
-            #for row in E_cost_estimate:
-            #    print(row)
-
-            #print("\nNE Cost Estimate")
-            #for row in NE_cost_estimate:
-            #    print(row)
-            #print("\n")
-
-            #print("NE believes optimal policies are")
-            #for i,(E_pol,NE_pol) in enumerate(zip(E_policies,NE_policies)):
-            #    print(f"{i}: {E_pol}\t{NE_pol}")
-
+            ##########################################################################################
+            #VAMP/THEORISE ABOUT USING ALTRUISM/COMPLIANCE TO AFFECT DECISION-MAKING
 
             #BASED ON THE POLICIES THAT MAXIMISE NE'S EXPECTED PAYOFF E MUST NOW DETERMINE THEIR
             # BEST ACTION BASED ON THEIR KNOWN, TRUE REWARD FUNCTION
@@ -217,6 +248,29 @@ class GameTheoryDrivingController():
             # CONSTRUCT A GAME IN WHICH THEY ARE INCENTIVISED TO GO TO WHERE WE WANT TO, BY MANIPULATING
             # WHAT THEY WOULD WANT TO DO BASED ON THE COMPLIANCE VALUE
 
+            #########################################################################################
+            #EVALUATING EQUILIBRIA
+
+            #print(f"\n\nSelecting Action for {self.ego.label}")
+            #print("E Cost Estimate:")
+            #for row in E_cost_estimate:
+            #    print(row)
+
+            #print("\nNE Cost Estimate")
+            #for row in NE_cost_estimate:
+            #    print(row)
+            #print("\n")
+
+            #print("NE believes optimal policies are")
+            #for i,(E_pol,NE_pol) in enumerate(zip(E_policies,NE_policies)):
+            #    print(f"{i}: {E_pol}\t{NE_pol}")
+
+
+            #Assunmption 1: Non-Ego agent will choose a behaviour which is identified as an equilibrium of the symmetric game (cooperation)
+            #Assumption 2: Non-Ego agent will choose an equilibrium behaviour that returns the highest reward for it (selfishness)
+
+            #Manually identify the policy that has the highest expected payoff for NE from all the 
+            # equilibria identified
             max_ep = None
             NE_best_policies = []
             for a,(E_p,NE_p) in enumerate(zip(E_policies,NE_policies)):
@@ -231,6 +285,8 @@ class GameTheoryDrivingController():
                     if a not in NE_best_policies:
                         NE_best_policies.append(a)
 
+
+            #Assumption 3: Non-Ego agent will choose a personally optimal equilbirium behaviour that best suits Ego agent. (civility)
             self.policy_pairs = {}
             self.plausible_other_trajectory_indices = []
             unseen_indices = [i for i in range(len(self.built_other_traj_list))]
@@ -248,13 +304,16 @@ class GameTheoryDrivingController():
 
         print("Plausible Trajectory indices for other are: {}".format(self.plausible_other_trajectory_indices))
 
+        ######################################################################################################
+        #EGO TRAJECTORY OPTION CONSTRUCTION
+
         #INSTEAD THE BEST POLICIES ARE WHAT THE NE_AGENT MIGHT DO, WE MUST COMPUTE THE BEST RESPONSE TO EACH ONE
         # GIVEN THE TRUE E REWARD FUNCTION, AND THEN THAT IS E'S BEHAVIOUR
         if self.ego_traj is  None:
             #if ego traj is None then Ego is choosing a trajectory to follow, and can choose from any trajectory
             ego_traj_choices = self.built_ego_traj_list
         else:
-            #ottherwise Ego is already following a trajectory and can euther choose to continue with that
+            #ottherwise Ego is already following a trajectory and can either choose to continue with that
             # trajectory, or reverse it (i.e. cancel the manoeuvre and go back)
             ego_traj_choices = [self.ego_traj]
             if "Stopped" not in self.ego_traj.label and "Reversed" not in self.ego_traj.label:
@@ -266,7 +325,13 @@ class GameTheoryDrivingController():
                 ego_traj_choices.append(reversed_traj)
 
             if "Stopped" not in self.ego_traj.label:
-                ego_traj_choices.append(StoppedTrajectory(self.ego_traj,self.t))
+                heading = self.ego.heading
+                lanes = [x for x in self.ego.on if isinstance(x,road_classes.lane)]
+                #Only wan to provide the ability to stop a trajectory if the vehicle is in a valid stopping position (i.e. facing the same direction as the lane they are on
+                for lane in lanes:
+                    if abs(heading-lane.heading)<2: #Arbitrary value. Should this be 0?
+                        ego_traj_choices.append(StoppedTrajectory(self.ego_traj,self.t))
+                        break
             #if "Reversed" not in self.ego_traj.label:
             #ego_traj_choices = [self.ego_traj,ReversedTrajectory(self.ego_traj,self.t-(1.5*self.ego.timestep)),StoppedTrajectory(self.ego_traj,self.t)]
             #else:
@@ -279,6 +344,8 @@ class GameTheoryDrivingController():
         print("Time to determine E's trajectory choices is: {}".format((t4-t_cur).microseconds))
         t_cur = t4
 
+        ###################################################################################################
+        #COMPUTE TRUE EGO COST MATRIX
         #Here we can calculate the Ego agent's true reward matrix based on the known trajectories available
         # to them and their known reward function
         #print("\n")
@@ -288,27 +355,37 @@ class GameTheoryDrivingController():
         #dummy_trajectories = [self.traj_builder.makeTrajectory(x,dummy_ego.state) for x in self.ego_traj_list]
         #Want to prevent the controller cancelling and then reinitialising the same trajectory for extra points
         #So we generate all possible next steps, then omit the one the agent is currently on (see "orig_index = ...")
-        dummy = self.ego.copy()
+        dummy = self.ego.copy() #duplicate ego vehicle to simulate trajectory execution
         for ego_traj in ego_traj_choices:
             new_row = []
+
             #Omit the trajectroy the agent is currently on from consideration
             orig_label = re.findall("([a-zA-Z]+)",ego_traj.label)[0]
             orig_index = self.ego_traj_list.index(orig_label)
+
+            # Dummy vehicle put ego trajectory
             putCarOnTraj(dummy,ego_traj,ego_traj.traj_len_t)
+            #Compute all possible behaviours for dummy vehicle
             possible_trajectories = [self.traj_builder.makeTrajectory(x,dummy.state) for i,x in enumerate(self.ego_traj_list) if i!=orig_index]
-            other_t_offset = ego_traj.traj_len_t-self.t
+            other_t_offset = ego_traj.traj_len_t-self.t #see how man timesteps will have passed by the time Ego gets to end of trajectory
 
             for i,other_traj in enumerate(self.built_other_traj_list):
                 #we believe that the rational agent has no reason to perform these trajectories
                 # no point wasting time computing the reward for them
-                if i not in self.plausible_other_trajectory_indices: new_row.append(0)
+                if i not in self.plausible_other_trajectory_indices: new_row.append(0) #0 captures indifference. For our purposes we assume this disqualifies
                 else:
                     #val,_ = computeReward(self.t,self.ego.copy(),ego_traj,self.other.copy(),other_traj,self.other_time_distr,veh1_reward_function=self.goal_function)
                     val_e,val_other = computeReward(self.t,self.ego.copy(),ego_traj,self.other.copy(),other_traj,self.other_time_distr,veh1_reward_function=self.goal_function)
                     #print("Reward to {} for performing {} when {} performs {} is {}".format(self.ego.label,ego_traj.label,self.other.label,other_traj.label,val_e))
-                    if val_e != -1:
+                    if val_e != -1: #e does not crash
+                        #Here we know that the chosen trajectory does not crash => if executed will reach the end
+                        # if this is one of the standard trajectories (Accelerate, Decelerate, Lane Change, etc.) == built_ego_traj_list then the final reward is the reward
+                        # associated with the trajectory (val_e)
+                        # Otherwise ego is performing a reconsideration, the point of which is to then perform another action.
+                        # So we compute the potential rewards ego could get after completing reconsideration and add that to val_e.
+                        #This motivates getting out of bad scenarios if possible
                         if ego_traj_choices != self.built_ego_traj_list:
-                            #shift time forward by the appropriate amount
+                            #shift time forward by the appropriate amount to estimate where NE would be after E has executed current trajectory
                             dummy_time_distr = other_time_distr[-1-int(other_t_offset/self.ego.timestep):] + other_time_distr[:-1-int(other_t_offset/self.ego.timestep)]
                             #max_possible_reward = max([computeReward(0,dummy_ego.copy(),x,dummy_other.copy(),other_traj,dummy_time_distr,veh1_reward_function=self.goal_function)[0] for x in dummy_trajectories])
                             possible_rewards = [computeReward(0,self.ego.copy(),x,self.other.copy(),other_traj,dummy_time_distr,veh1_reward_function=self.goal_function)[0] for x in possible_trajectories]
@@ -335,7 +412,6 @@ class GameTheoryDrivingController():
             print(row)
         print("\n")
 
-
         #expected_payoffs = []
         #for i,row in enumerate(E_cost_second_estimate):
         #    payoff = []
@@ -348,6 +424,9 @@ class GameTheoryDrivingController():
         #    print(entry)
 
         #ep_sum = [sum(row) for row in expected_payoffs]
+
+        ###########################################################################################################
+        #DECISION-MAKING
 
         #We compute the expected payoff for each possible trajectory of E against each possible optimal
         # policy for NE
@@ -423,12 +502,14 @@ class GameTheoryDrivingController():
 
 
     def paramCopy(self,target=None):
+        """Used during vehicle duplication to port controller to new ego vehicle"""
         dup_initialisation_params = dict(self.initialisation_params)
         dup_initialisation_params["ego"] = target
         return dup_initialisation_params
 
 
     def copy(self,**kwargs):
+        """Used during vehicle duplication to port controller to new ego vehicle"""
         dup_init_params = self.paramCopy(**kwargs)
         return GameTheoryDrivingController(**dup_init_params)
 
@@ -440,6 +521,7 @@ class GameTheoryDrivingController():
 
 
     def closeFiles(self):
+        """End of Program function to close all open files"""
         self.ego_preference_file.close()
         self.other_preference_file.close()
         self.rollout_file.close()
@@ -461,6 +543,7 @@ class GameTheoryDrivingController():
 
 
 def printTrajectory(veh,traj,timestep):
+    """Print the executable positions and actions if vehicle veh executed trajectory traj from it's current state"""
     time = 0
     position_list = traj.completePositionList(timestep)
     action_list = traj.completeActionList(veh.Lr+veh.Lf,timestep)
@@ -472,6 +555,7 @@ def printTrajectory(veh,traj,timestep):
 
 
 def initialiseFile(filename,ego_name,timestep,data_labels):
+    """Iniitialise file for specified agent to store data"""
     date = datetime.datetime.now()
     file = open(filename+"-{}-{}_{}.txt".format(ego_name,date.hour,date.minute),"a")
     file.write("Ego is: {}\n".format(ego_name))
@@ -490,6 +574,7 @@ def writeToFile(file,data):
 
 
 def getState(veh,traj,t):
+    """Extract state at a particular time for the specified trajectory"""
     state = {}
     #the action available to us is the last action taken
     # whereas the physical state available is the current state (time t)
@@ -509,6 +594,8 @@ def getState(veh,traj,t):
 
 
 def getProb(veh,state,traj,t):
+    """Compute the "probability" of being on trajectory <traj> at time <t> given the actual observed state <state>"""
+    #Actually computing likelihood, defined by the similarity between the states
     target_state = getState(veh,traj,t)
     #print("For trajectory {}".format(traj.label))
     #print("Comparing Vehicle State: {}\n with Target State {}\n".format(state,target_state))
@@ -518,6 +605,8 @@ def getProb(veh,state,traj,t):
 
 
 def computeSimilarity(state,goal_state):
+    """Compute Similarity between state and goal state"""
+    #e^{-||state-goal_state||_2}
     sim = 0
     for entry in goal_state:
         sim += computeDistance(goal_state[entry],state[entry])**2
@@ -554,6 +643,7 @@ def updatePreference(t,veh,veh_state,veh_traj_list,veh_pref):
 
 
 def updateTimeDistr(veh,veh_state,traj_list,traj_preference,time_distr,dt):
+    """Use Bayes' Filter to update the distribution estimating where along the trajectory the vehicle is"""
     new_distr = []
     num_sum = 0
     #state is updated at the end of each iteration of the simulation. If state is {} then in first iteration
@@ -598,6 +688,8 @@ def updateTimeDistr(veh,veh_state,traj_list,traj_preference,time_distr,dt):
 def checkForLaneCrossing(veh):
     is_on = []
     for entry in [x for x in veh.on if isinstance(x,road_classes.Lane)]:
+        #Label for the lane is already in is_on means you must have already processed the other lane
+        # therefore you have crossed lanes
         if entry.label[:-1] in is_on:
             return True
         else:
@@ -606,6 +698,8 @@ def checkForLaneCrossing(veh):
 
 
 def checkForCrash(veh1,traj1,t1,veh2,traj2,t2,radius=-1):
+    """Check if veh1 following traj1 starting at time t1, and veh2 following traj2 starting at time t2 get
+       within radius of each other"""
     t =0
     r1,r2 = 0,0
     while(t1+t<=traj1.traj_len_t and t2+t<=traj2.traj_len_t):
@@ -654,6 +748,7 @@ def computeReward(init_t1,veh1,traj1,veh2,traj2,veh2_time_distr,veh1_reward_func
         #    print("NE: (Heading: {}) {}-{}\t{}: {}-{}".format(veh2.heading,veh2.four_corners["front_left"],veh2.four_corners["back_right"],entry.label,entry.four_corners["front_left"],entry.four_corners["back_right"]))
         #print("\n")
 
+        #veh.on == [] means the car is not on any environment object => it has gone off the road
         if veh1.on == [] or checkForLaneCrossing(veh1):
             #print("Veh {} has gone off road: Position: {}".format(veh1.label,veh1.state["position"]))
             #print(f"{veh1.label} is on {[x.label for x in veh1.on]}")
@@ -663,6 +758,7 @@ def computeReward(init_t1,veh1,traj1,veh2,traj2,veh2_time_distr,veh1_reward_func
             #print(f"{veh2.label} is on {[x.label for x in veh2.on]}")
             r2 = -1 #discourage stopping trajectory while crossing lanes
 
+        #If we have not gone off the road or crashed, and we have a reward function, then the reward returned should be the reward specified by the function
         if veh1_reward_function is not None and r1!=-1:
             r1 = veh1_reward_function(init_veh1,veh1)
         if veh2_reward_function is not None and r2!=-1:
@@ -673,6 +769,7 @@ def computeReward(init_t1,veh1,traj1,veh2,traj2,veh2_time_distr,veh1_reward_func
 
 
 def computeGlobalCostMatrix(t,veh1,veh1_traj_list,veh2,veh2_traj_list,veh2_time_distr):
+    """Compute the Global Cost Matrix; the cost matrix that does not know the goals of either agent"""
     E_cost_list = [[0 for _ in veh2_traj_list] for _ in veh1_traj_list]
     NE_cost_list = [[0 for _ in veh1_traj_list] for _ in veh2_traj_list]
     for i,E_traj in enumerate(veh1_traj_list):
@@ -684,14 +781,18 @@ def computeGlobalCostMatrix(t,veh1,veh1_traj_list,veh2,veh2_traj_list,veh2_time_
 
 
 def computeNashEquilibria(E_cost_matrix,NE_cost_matrix):
+    """Fairly Self Explanatory"""
     E_cost_matrix = np.array(E_cost_matrix)
     NE_cost_matrix = np.array(NE_cost_matrix)
     game = nash.Game(E_cost_matrix,NE_cost_matrix)
     #equilibria = game.lemke_howson_enumeration()
+    #Support enumeration returns all possible policies that have non-zero support.
+    # The nash library is a bit.... not super helpful in this regard
     equilibria = game.support_enumeration(non_degenerate=False,tol=0)
 
     E_policies,NE_policies = [],[]
     for eq in equilibria:
+        #Clean the equilibria data to make sure there are no nan values
         if not np.isnan(eq[0][0]):
             print("Eq is: {}".format(eq))
             E_policies.append(eq[0])

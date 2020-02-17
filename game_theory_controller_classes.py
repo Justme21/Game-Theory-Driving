@@ -326,10 +326,10 @@ class GameTheoryDrivingController():
 
             if "Stopped" not in self.ego_traj.label:
                 heading = self.ego.heading
-                lanes = [x for x in self.ego.on if isinstance(x,road_classes.lane)]
+                lanes = [x for x in self.ego.on if isinstance(x,road_classes.Lane)]
                 #Only wan to provide the ability to stop a trajectory if the vehicle is in a valid stopping position (i.e. facing the same direction as the lane they are on
                 for lane in lanes:
-                    if abs(heading-lane.heading)<2: #Arbitrary value. Should this be 0?
+                    if abs(heading-lane.direction)<2: #Arbitrary value. Should this be 0?
                         ego_traj_choices.append(StoppedTrajectory(self.ego_traj,self.t))
                         break
             #if "Reversed" not in self.ego_traj.label:

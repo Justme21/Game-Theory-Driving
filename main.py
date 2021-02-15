@@ -39,14 +39,14 @@ def initialiseSimulator(cars,speed_limit,graphics,init_speeds,lane_width=None,da
     else:
         car_speeds = init_speeds
 
-    num_junctions = 3
-    num_roads = 2
-    road_angles = [90,90]
+    num_junctions = 9
+    num_roads = 8
+    road_angles = [90,90,90,90,0,0,0,0]
     #road_lengths = [4,156] #Shorter track for generating results
-    road_lengths = [4,60] #Shorter track for generating results
-    junc_pairs = [(0,1),(1,2)]
+    road_lengths = [6,4,10,20,6,4,10,20] #Shorter track for generating results
+    junc_pairs = [(0,1),(1,2),(2,3),(3,4),(5,6),(6,7),(7,3),(3,8)]
 
-    starts = [[(0,1),1],[(0,1),0]] #Follower car is initialised on the first road, leading car on the 3rd (assuring space between them)
+    starts = [[(1,2),1],[(6,7),1]] #Follower car is initialised on the first road, leading car on the 3rd (assuring space between them)
     dests = [[(1,2),0],[(1,2),0]] #Simulation ends when either car passes the end of the 
 
     run_graphics = graphics
@@ -86,7 +86,7 @@ def followTrajectory(sim,veh_list,traj_list,speed_limit,show=True,compute_dist=F
     """Given a list of vehicles and corresponding trajectories generates a graphical simulation of each car following
        their respective trajectories"""
     sim_graphic = sim.graphic #Store original graphics state of simulator
-    sim.setGraphic(show) #Set simulator.graphics to match function intention
+    isim.setGraphic(show) #Set simulator.graphics to match function intention
     move_dict = {}
     record_val = False
     #realised_traj_list = [[] for _ in traj_list]
@@ -377,18 +377,18 @@ if __name__ == "__main__":
     traj_classes_2 = TrajectoryClasses(time_len=1.2*time_len,lane_width=lane_width,accel_range=accel_range,jerk=jerk)
     traj_types = traj_classes.traj_types.keys()
 
-    #veh0 = vehicle_classes.Car(controller=None,is_ego=False,debug=debug,label="Lane-Lead",timestep=dt)
+    #veh0 = vehicle_classes.Car(controller=None,is_ego=False,debug=debug,label="Lane-Lead-grey",timestep=dt)
     veh1 = vehicle_classes.Car(controller=None,is_ego=False,debug=debug,label="Lane-Follow",timestep=dt)
     #veh1 = vehicle_classes.Car(controller=None,is_ego=False,debug=debug,label="Non-Ego",timestep=dt)
     veh2 = vehicle_classes.Car(controller=None,is_ego=True,debug=debug,label="Ego",timestep=dt)
 
     sim = initialiseSimulator([veh1,veh2],speed_limit,graphics,[speed_limit/2,speed_limit/2],lane_width,False)
     #sim = initialiseSimulator([veh1],speed_limit,True,[speed_limit/2],lane_width,False)
-    veh2.heading = (veh2.heading+180)%360
-    veh2.y_com  = veh1.y_com
-    veh2.initialisation_params["prev_disp_y"] = veh1.initialisation_params["prev_disp_y"]
-    veh2.initialisation_params["heading"] = veh2.heading
-    veh2.sense()
+    #veh2.heading = (veh2.heading+180)%360
+    #veh2.y_com  = veh1.y_com
+    #veh2.initialisation_params["prev_disp_y"] = veh1.initialisation_params["prev_disp_y"]
+    #veh2.initialisation_params["heading"] = veh2.heading
+    #veh2.sense()
 
     #veh1.setMotionParams(posit=(veh1.x_com,veh1.y_com+1.25*veh1.length))
     #veh1.initialisation_params["prev_disp_y"] += 1.25*veh1.length
